@@ -1,0 +1,33 @@
+{
+  "sensors": [
+    {
+      "pair_id": 0,
+      "distance_from_fan": 10.0,
+      "low_height": 3.0,
+      "high_height": 15.0
+    },
+    {
+      "pair_id": 1,
+      "distance_from_fan": 25.0,
+      "low_height": 3.0,
+      "high_height": 12.0
+    },
+    {
+      "pair_id": 2,
+      "distance_from_fan": 45.0,
+      "low_height": 3.0,
+      "high_height": 12.0
+    },
+    {
+      "pair_id": 3,
+      "distance_from_fan": 65.0,
+      "low_height": 3.0,
+      "high_height": 10.0
+    }
+  ],
+  "simulation": {
+    "num_smokers": 48,
+    "fan_mode": "auto",
+    "simulation_speed": 2.0
+  }
+}

@@ -1,0 +1,306 @@
+"""Smoke physics simulation engine with particle system."""
+
+import numpy as np
+from utils.constants import (
+    TIME_STEP, GRAVITY, BUOYANCY_FACTOR, DIFFUSION_COEFFICIENT,
+    PARTICLES_PER_CIGAR_PER_SECOND, MAX_PARTICLES, SMOKER_HEIGHT,
+    ROOM_WIDTH, ROOM_LENGTH, ROOM_HEIGHT
+)
+
+
+class SmokeParticle:
+    """Represents a smoke particle in the simulation."""
+    
+    def __init__(self, position, velocity=None, age=0.0):
+        """Initialize a smoke particle.
+        
+        Args:
+            position: numpy array [x, y, z]
+            velocity: numpy array [vx, vy, vz] (optional)
+            age: age of particle in seconds
+        """
+        self.position = np.array(position, dtype=float)
+        self.velocity = np.array(velocity if velocity is not None else [0, 0, 0], dtype=float)
+        self.age = age
+        self.lifetime = 300.0  # Particles last 5 minutes before removal
+
+
+class SmokeSimulation:
+    """Main smoke physics simulation engine."""
+    
+    def __init__(self, room, fan):
+        """Initialize smoke simulation.
+        
+        Args:
+            room: Room object
+            fan: ExhaustFan object
+        """
+        self.room = room
+        self.fan = fan
+        
+        # Particle storage (using numpy arrays for efficiency)
+        self.particles_positions = np.zeros((0, 3), dtype=float)
+        self.particles_velocities = np.zeros((0, 3), dtype=float)
+        self.particles_ages = np.zeros(0, dtype=float)
+        
+        # Simulation state
+        self.time = 0.0
+        self.num_smokers = 0
+        self.smoker_positions = np.zeros((0, 3), dtype=float)
+        self.particle_generation_rate = PARTICLES_PER_CIGAR_PER_SECOND
+        
+        # Performance tracking
+        self.particles_generated = 0
+        self.particles_removed = 0
+        
+        # Accumulator for fractional particles
+        self.particle_accumulator = 0.0
+        
+    def set_num_smokers(self, num_smokers):
+        """Set number of active smokers.
+        
+        Args:
+            num_smokers: Number of smokers in the room
+        """
+        self.num_smokers = num_smokers
+        self.smoker_positions = self.room.generate_smoker_positions(num_smokers, SMOKER_HEIGHT)
+    
+    def generate_particles(self, dt):
+        """Generate new smoke particles from smokers.
+        
+        Args:
+            dt: Time step in seconds
+        """
+        if self.num_smokers == 0:
+            return
+        
+        # Calculate number of particles to generate
+        particles_per_step = self.particle_generation_rate * self.num_smokers * dt
+        self.particle_accumulator += particles_per_step
+        
+        num_new_particles = int(self.particle_accumulator)
+        self.particle_accumulator -= num_new_particles
+        
+        if num_new_particles == 0:
+            return
+        
+        # Check if we're at max capacity
+        current_count = len(self.particles_positions)
+        if current_count + num_new_particles > MAX_PARTICLES:
+            num_new_particles = MAX_PARTICLES - current_count
+            if num_new_particles <= 0:
+                return
+        
+        # Generate new particles from random smoker positions
+        smoker_indices = np.random.randint(0, self.num_smokers, size=num_new_particles)
+        new_positions = self.smoker_positions[smoker_indices].copy()
+        
+        # Add small random offset to positions
+        new_positions += np.random.normal(0, 0.2, size=(num_new_particles, 3))
+        
+        # Initial velocity (slightly upward due to heat)
+        new_velocities = np.random.normal(0, 0.5, size=(num_new_particles, 3))
+        new_velocities[:, 1] += 1.0  # Upward bias
+        
+        # Ages
+        new_ages = np.zeros(num_new_particles)
+        
+        # Append to existing arrays
+        self.particles_positions = np.vstack([self.particles_positions, new_positions])
+        self.particles_velocities = np.vstack([self.particles_velocities, new_velocities])
+        self.particles_ages = np.concatenate([self.particles_ages, new_ages])
+        
+        self.particles_generated += num_new_particles
+    
+    def apply_physics(self, dt):
+        """Apply physics forces to all particles.
+        
+        Args:
+            dt: Time step in seconds
+        """
+        if len(self.particles_positions) == 0:
+            return
+        
+        # 1. Buoyancy (upward force due to temperature difference)
+        buoyancy = np.zeros_like(self.particles_velocities)
+        buoyancy[:, 1] = BUOYANCY_FACTOR * GRAVITY
+        
+        # 2. Diffusion (random walk)
+        diffusion = np.random.normal(0, DIFFUSION_COEFFICIENT, size=self.particles_velocities.shape)
+        
+        # 3. Fan suction (advection toward fan)
+        fan_velocities = self.fan.calculate_velocity_field(self.particles_positions)
+        
+        # 4. Gravity (slight downward force on cooler particles)
+        # Older particles cool down
+        cooling_factor = np.clip(self.particles_ages / 60.0, 0, 1)  # Cool over 1 minute
+        gravity = np.zeros_like(self.particles_velocities)
+        gravity[:, 1] = -GRAVITY * 0.1 * cooling_factor
+        
+        # Combine forces
+        acceleration = buoyancy + diffusion + fan_velocities + gravity
+        
+        # Update velocities
+        self.particles_velocities += acceleration * dt
+        
+        # Apply damping (air resistance)
+        damping = 0.95
+        self.particles_velocities *= damping
+        
+        # Update positions
+        self.particles_positions += self.particles_velocities * dt
+        
+        # Boundary conditions - particles bounce off walls and ceiling/floor
+        self._apply_boundary_conditions()
+        
+        # Age particles
+        self.particles_ages += dt
+    
+    def _apply_boundary_conditions(self):
+        """Apply boundary conditions to keep particles in room."""
+        # X boundaries (left/right walls)
+        mask = self.particles_positions[:, 0] < 0
+        self.particles_positions[mask, 0] = 0
+        self.particles_velocities[mask, 0] *= -0.5
+        
+        mask = self.particles_positions[:, 0] > ROOM_WIDTH
+        self.particles_positions[mask, 0] = ROOM_WIDTH
+        self.particles_velocities[mask, 0] *= -0.5
+        
+        # Y boundaries (floor/ceiling)
+        mask = self.particles_positions[:, 1] < 0
+        self.particles_positions[mask, 1] = 0
+        self.particles_velocities[mask, 1] *= -0.5
+        
+        mask = self.particles_positions[:, 1] > ROOM_HEIGHT
+        self.particles_positions[mask, 1] = ROOM_HEIGHT
+        self.particles_velocities[mask, 1] *= -0.5
+        
+        # Z boundaries (front/back walls)
+        mask = self.particles_positions[:, 2] < 0
+        self.particles_positions[mask, 2] = 0
+        self.particles_velocities[mask, 2] *= -0.5
+        
+        # Back wall with fan - particles near fan are removed
+        mask = self.particles_positions[:, 2] > ROOM_LENGTH - 0.5
+        near_fan = mask.copy()
+        
+        # Check if near fan position
+        if np.any(near_fan):
+            distances_to_fan = np.linalg.norm(
+                self.particles_positions[near_fan] - self.fan.position,
+                axis=1
+            )
+            # Remove particles very close to fan (exhausted)
+            remove_mask = near_fan.copy()
+            remove_mask[near_fan] = distances_to_fan < self.fan.radius * 2
+            self._remove_particles(remove_mask)
+        else:
+            # Regular wall bounce
+            self.particles_positions[mask, 2] = ROOM_LENGTH
+            self.particles_velocities[mask, 2] *= -0.5
+    
+    def remove_old_particles(self):
+        """Remove particles that are too old or exhausted."""
+        # Remove old particles
+        old_mask = self.particles_ages > 300.0  # 5 minutes
+        self._remove_particles(old_mask)
+    
+    def _remove_particles(self, mask):
+        """Remove particles indicated by boolean mask.
+        
+        Args:
+            mask: Boolean array indicating which particles to remove
+        """
+        num_removed = np.sum(mask)
+        if num_removed > 0:
+            keep_mask = ~mask
+            self.particles_positions = self.particles_positions[keep_mask]
+            self.particles_velocities = self.particles_velocities[keep_mask]
+            self.particles_ages = self.particles_ages[keep_mask]
+            self.particles_removed += num_removed
+    
+    def update(self, dt):
+        """Update simulation for one time step.
+        
+        Args:
+            dt: Time step in seconds
+        """
+        # Generate new particles
+        self.generate_particles(dt)
+        
+        # Apply physics
+        self.apply_physics(dt)
+        
+        # Remove old particles
+        self.remove_old_particles()
+        
+        # Update time
+        self.time += dt
+    
+    def get_particle_count(self):
+        """Get current number of particles.
+        
+        Returns:
+            Number of active particles
+        """
+        return len(self.particles_positions)
+    
+    def get_particles(self):
+        """Get particle positions for rendering/analysis.
+        
+        Returns:
+            numpy array of particle positions
+        """
+        return self.particles_positions.copy()
+    
+    def calculate_room_average_ppm(self):
+        """Calculate average PPM across the entire room.
+        
+        Returns:
+            Average PPM value
+        """
+        if len(self.particles_positions) == 0:
+            return 0.0
+        
+        # Simple model: particles per cubic foot
+        particles_per_cubic_foot = len(self.particles_positions) / self.room.volume
+        avg_ppm = particles_per_cubic_foot * 10  # Scaling factor
+        return avg_ppm
+    
+    def calculate_room_average_clarity(self):
+        """Calculate average clarity across the room.
+        
+        Returns:
+            Average clarity percentage
+        """
+        avg_ppm = self.calculate_room_average_ppm()
+        path_length = 10.0  # Assume 10 feet visibility
+        clarity = 100.0 * np.exp(-0.0001 * avg_ppm * path_length)
+        return np.clip(clarity, 0.0, 100.0)
+    
+    def reset(self):
+        """Reset simulation to initial state."""
+        self.particles_positions = np.zeros((0, 3), dtype=float)
+        self.particles_velocities = np.zeros((0, 3), dtype=float)
+        self.particles_ages = np.zeros(0, dtype=float)
+        self.time = 0.0
+        self.particles_generated = 0
+        self.particles_removed = 0
+        self.particle_accumulator = 0.0
+    
+    def get_statistics(self):
+        """Get simulation statistics.
+        
+        Returns:
+            Dictionary with simulation statistics
+        """
+        return {
+            'time': self.time,
+            'particle_count': self.get_particle_count(),
+            'particles_generated': self.particles_generated,
+            'particles_removed': self.particles_removed,
+            'num_smokers': self.num_smokers,
+            'avg_ppm': self.calculate_room_average_ppm(),
+            'avg_clarity': self.calculate_room_average_clarity()
+        }
