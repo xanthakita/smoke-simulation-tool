@@ -11,7 +11,7 @@ ROOM_VOLUME = ROOM_WIDTH * ROOM_LENGTH * ROOM_HEIGHT  # cubic feet
 # Fan specifications
 FAN_DIAMETER = 28.8 / 12.0  # Convert inches to feet (2.4 ft)
 FAN_RADIUS = FAN_DIAMETER / 2.0
-FAN_POSITION = np.array([25.0, 15.0, 75.0])  # 5ft from right wall, 15ft up, on back wall
+FAN_POSITION = np.array([5.0, 15.0, 75.0])  # 5ft from left wall, 15ft up, on back wall (right side when facing from front)
 FAN_MIN_SPEED = 0.0  # Percentage
 FAN_MAX_SPEED = 100.0  # Percentage
 
@@ -35,9 +35,9 @@ PARTICLES_PER_CIGAR_PER_SECOND = 500  # Number of simulation particles per cigar
 MAX_PARTICLES = 100000  # Maximum particles in simulation
 
 # Physics constants
-GRAVITY = 32.174  # ft/s² (downward)
-BUOYANCY_FACTOR = 0.03  # Upward force factor due to temperature difference
-DIFFUSION_COEFFICIENT = 0.15  # ft²/s (random dispersion)
+GRAVITY = 32.174  # ft/s² (downward) - NOTE: Not applied to smoke particles
+BUOYANCY_FACTOR = 0.15  # Upward force factor - smoke rises slowly (increased from 0.03)
+DIFFUSION_COEFFICIENT = 0.25  # ft²/s (random dispersion for horizontal spreading)
 TIME_STEP = 0.1  # seconds per simulation step
 
 # Sensor properties

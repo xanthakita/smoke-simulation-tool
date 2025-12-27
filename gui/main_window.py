@@ -527,14 +527,26 @@ class MainWindow(QMainWindow):
         """Update display panels (called by timer)."""
         # Update fan info
         fan_info = self.fan.get_info()
-        info_text = f\"\"\"Current Speed: {fan_info['speed_percent']:.1f}%\nTarget Speed: {fan_info['target_speed']:.1f}%\nCFM: {fan_info['cfm']:.0f}\nVelocity: {fan_info['velocity']:.1f} ft/s\nRun Time: {fan_info['run_time']:.1f} s\nStatus: {'Running' if fan_info['is_running'] else 'Off'}\"\"\"\n        self.label_fan_info.setText(info_text)
+        info_text = f"""Current Speed: {fan_info['speed_percent']:.1f}%
+Target Speed: {fan_info['target_speed']:.1f}%
+CFM: {fan_info['cfm']:.0f}
+Velocity: {fan_info['velocity']:.1f} ft/s
+Run Time: {fan_info['run_time']:.1f} s
+Status: {'Running' if fan_info['is_running'] else 'Off'}"""
+        self.label_fan_info.setText(info_text)
         
         # Update sensor readings
-        sensor_text = f"Simulation Time: {self.simulation_time:.1f}s\\n\\n"
-        sensor_text += f\"Room Average PPM: {self.smoke_sim.calculate_room_average_ppm():.1f}\\n\"\n        sensor_text += f\"Room Average Clarity: {self.smoke_sim.calculate_room_average_clarity():.1f}%\\n\"\n        sensor_text += f\"Active Particles: {self.smoke_sim.get_particle_count()}\\n\\n\"\n        
+        sensor_text = f"Simulation Time: {self.simulation_time:.1f}s\n\n"
+        sensor_text += f"Room Average PPM: {self.smoke_sim.calculate_room_average_ppm():.1f}\n"
+        sensor_text += f"Room Average Clarity: {self.smoke_sim.calculate_room_average_clarity():.1f}%\n"
+        sensor_text += f"Active Particles: {self.smoke_sim.get_particle_count()}\n\n"
+        
         for pair in self.sensor_pairs:
             readings = pair.get_readings()
-            sensor_text += f\"Sensor Pair {readings['pair_id']}:\\n\"\n            sensor_text += f\"  Low  - PPM: {readings['low']['ppm']:.1f}, Clarity: {readings['low']['clarity_percent']:.1f}%\\n\"\n            sensor_text += f\"  High - PPM: {readings['high']['ppm']:.1f}, Clarity: {readings['high']['clarity_percent']:.1f}%\\n\\n\"\n        
+            sensor_text += f"Sensor Pair {readings['pair_id']}:\n"
+            sensor_text += f"  Low  - PPM: {readings['low']['ppm']:.1f}, Clarity: {readings['low']['clarity_percent']:.1f}%\n"
+            sensor_text += f"  High - PPM: {readings['high']['ppm']:.1f}, Clarity: {readings['high']['clarity_percent']:.1f}%\n\n"
+        
         self.text_sensor_data.setText(sensor_text)
         
         # Update graphs
@@ -544,24 +556,143 @@ class MainWindow(QMainWindow):
         self._update_statistics()
     
     def _update_graphs(self):
-        \"\"\"Update real-time graphs.\"\"\"\n        graph_data = self.data_logger.get_graph_data()\n        time_data = graph_data['time']\n        \n        if len(time_data) == 0:\n            return\n        \n        # Clear and redraw PPM graph\n        self.graph_ppm.clear()\n        self.graph_ppm.plot(time_data, graph_data['room_ppm'], pen='w', name='Room Avg')\n        \n        colors = ['r', 'g', 'b', 'y']\n        for idx, (sensor_id, ppm_data) in enumerate(graph_data['sensor_ppm'].items()):\n            if len(ppm_data) > 0:\n                color = colors[idx % len(colors)]\n                self.graph_ppm.plot(time_data, ppm_data, pen=color, name=f'Sensor {sensor_id}')\n        \n        # Clear and redraw clarity graph\n        self.graph_clarity.clear()\n        self.graph_clarity.plot(time_data, graph_data['room_clarity'], pen='w', name='Room Avg')\n        \n        for idx, (sensor_id, clarity_data) in enumerate(graph_data['sensor_clarity'].items()):\n            if len(clarity_data) > 0:\n                color = colors[idx % len(colors)]\n                self.graph_clarity.plot(time_data, clarity_data, pen=color, name=f'Sensor {sensor_id}')\n        \n        # Clear and redraw fan speed graph\n        self.graph_fan.clear()\n        self.graph_fan.plot(time_data, graph_data['fan_speed'], pen='c')\n    \n    def _update_statistics(self):\n        \"\"\"Update statistics display.\"\"\"\n        stats = self.data_logger.get_statistics()\n        sim_stats = self.smoke_sim.get_statistics()\n        \n        stats_text = \"=== SIMULATION STATISTICS ===\\n\\n\"\n        stats_text += f\"Simulation Time: {sim_stats['time']:.1f} seconds\\n\\n\"\n        \n        stats_text += \"Air Quality:\\n\"\n        stats_text += f\"  Current Room PPM: {stats['current_room_ppm']:.1f}\\n\"\n        stats_text += f\"  Peak PPM: {stats['peak_ppm']:.1f}\\n\"\n        stats_text += f\"  Average PPM: {stats['average_ppm']:.1f}\\n\"\n        stats_text += f\"  Current Clarity: {stats['current_room_clarity']:.1f}%\\n\\n\"\n        \n        if stats['time_to_clear'] is not None:\n            stats_text += f\"Time to Clear: {stats['time_to_clear']:.1f} seconds\\n\\n\"\n        else:\n            stats_text += \"Time to Clear: Not yet cleared\\n\\n\"\n        \n        stats_text += \"Particles:\\n\"\n        stats_text += f\"  Active Particles: {sim_stats['particle_count']}\\n\"\n        stats_text += f\"  Total Generated: {sim_stats['particles_generated']}\\n\"\n        stats_text += f\"  Total Removed: {sim_stats['particles_removed']}\\n\\n\"\n        \n        stats_text += \"Configuration:\\n\"\n        stats_text += f\"  Number of Smokers: {sim_stats['num_smokers']}\\n\"\n        stats_text += f\"  Sensor Pairs: {len(self.sensor_pairs)}\\n\"\n        stats_text += f\"  Fan Mode: {self.fan_controller.mode}\\n\"\n        stats_text += f\"  Simulation Speed: {self.simulation_speed}x\\n\\n\"\n        \n        stats_text += f\"Data Points Logged: {stats['data_points']}\\n\"\n        \n        self.text_statistics.setText(stats_text)
+        """Update real-time graphs."""
+        graph_data = self.data_logger.get_graph_data()
+        time_data = graph_data['time']
+        
+        if len(time_data) == 0:
+            return
+        
+        # Clear and redraw PPM graph
+        self.graph_ppm.clear()
+        self.graph_ppm.plot(time_data, graph_data['room_ppm'], pen='w', name='Room Avg')
+        
+        colors = ['r', 'g', 'b', 'y']
+        for idx, (sensor_id, ppm_data) in enumerate(graph_data['sensor_ppm'].items()):
+            if len(ppm_data) > 0:
+                color = colors[idx % len(colors)]
+                self.graph_ppm.plot(time_data, ppm_data, pen=color, name=f'Sensor {sensor_id}')
+        
+        # Clear and redraw clarity graph
+        self.graph_clarity.clear()
+        self.graph_clarity.plot(time_data, graph_data['room_clarity'], pen='w', name='Room Avg')
+        
+        for idx, (sensor_id, clarity_data) in enumerate(graph_data['sensor_clarity'].items()):
+            if len(clarity_data) > 0:
+                color = colors[idx % len(colors)]
+                self.graph_clarity.plot(time_data, clarity_data, pen=color, name=f'Sensor {sensor_id}')
+        
+        # Clear and redraw fan speed graph
+        self.graph_fan.clear()
+        self.graph_fan.plot(time_data, graph_data['fan_speed'], pen='c')
+    
+    def _update_statistics(self):
+        """Update statistics display."""
+        stats = self.data_logger.get_statistics()
+        sim_stats = self.smoke_sim.get_statistics()
+        
+        stats_text = "=== SIMULATION STATISTICS ===\n\n"
+        stats_text += f"Simulation Time: {sim_stats['time']:.1f} seconds\n\n"
+        
+        stats_text += "Air Quality:\n"
+        stats_text += f"  Current Room PPM: {stats['current_room_ppm']:.1f}\n"
+        stats_text += f"  Peak PPM: {stats['peak_ppm']:.1f}\n"
+        stats_text += f"  Average PPM: {stats['average_ppm']:.1f}\n"
+        stats_text += f"  Current Clarity: {stats['current_room_clarity']:.1f}%\n\n"
+        
+        if stats['time_to_clear'] is not None:
+            stats_text += f"Time to Clear: {stats['time_to_clear']:.1f} seconds\n\n"
+        else:
+            stats_text += "Time to Clear: Not yet cleared\n\n"
+        
+        stats_text += "Particles:\n"
+        stats_text += f"  Active Particles: {sim_stats['particle_count']}\n"
+        stats_text += f"  Total Generated: {sim_stats['particles_generated']}\n"
+        stats_text += f"  Total Removed: {sim_stats['particles_removed']}\n\n"
+        
+        stats_text += "Configuration:\n"
+        stats_text += f"  Number of Smokers: {sim_stats['num_smokers']}\n"
+        stats_text += f"  Sensor Pairs: {len(self.sensor_pairs)}\n"
+        stats_text += f"  Fan Mode: {self.fan_controller.mode}\n"
+        stats_text += f"  Simulation Speed: {self.simulation_speed}x\n\n"
+        
+        stats_text += f"Data Points Logged: {stats['data_points']}\n"
+        
+        self.text_statistics.setText(stats_text)
     
     def _save_configuration(self):
-        \"\"\"Save current configuration.\"\"\"\n        filename, _ = QFileDialog.getSaveFileName(\n            self, \"Save Configuration\", \"configs\", \"JSON Files (*.json)\"\n        )\n        \n        if filename:\n            config = ConfigManager.create_config_dict(\n                self.sensor_pairs,\n                self.spin_smokers.value(),\n                self.fan_controller.mode,\n                self.simulation_speed\n            )\n            \n            self.config_manager.save_config(config, filename.split('/')[-1])\n            QMessageBox.information(self, \"Success\", \"Configuration saved successfully.\")\n    
+        """Save current configuration."""
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Save Configuration", "configs", "JSON Files (*.json)"
+        )
+        
+        if filename:
+            config = ConfigManager.create_config_dict(
+                self.sensor_pairs,
+                self.spin_smokers.value(),
+                self.fan_controller.mode,
+                self.simulation_speed
+            )
+            
+            self.config_manager.save_config(config, filename.split('/')[-1])
+            QMessageBox.information(self, "Success", "Configuration saved successfully.")
     def _load_configuration(self):
-        \"\"\"Load a configuration.\"\"\"\n        filename, _ = QFileDialog.getOpenFileName(\n            self, \"Load Configuration\", \"configs\", \"JSON Files (*.json)\"\n        )\n        \n        if filename:\n            config = self.config_manager.load_config(filename.split('/')[-1])\n            \n            if config:\n                # Reset first\n                self._reset_simulation()
+        """Load a configuration."""
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Load Configuration", "configs", "JSON Files (*.json)"
+        )
+        
+        if filename:
+            config = self.config_manager.load_config(filename.split('/')[-1])
+            
+            if config:
+                # Reset first
+                self._reset_simulation()
                 
-                # Clear existing sensors\n                self.sensor_pairs.clear()\n                self.fan_controller.clear_sensor_pairs()\n                self.sensor_list.clear()
+                # Clear existing sensors
+                self.sensor_pairs.clear()
+                self.fan_controller.clear_sensor_pairs()
+                self.sensor_list.clear()
                 
-                # Load sensors\n                for sensor_config in config.get('sensors', []):\n                    pair_id = sensor_config['pair_id']\n                    distance = sensor_config['distance_from_fan']\n                    low_height = sensor_config['low_height']\n                    high_height = sensor_config['high_height']\n                    \n                    sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION)\n                    self.sensor_pairs.append(sensor_pair)\n                    self.fan_controller.add_sensor_pair(sensor_pair)\n                    \n                    self.sensor_list.addItem(\n                        f\"Pair {pair_id}: {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft\"\n                    )
+                # Load sensors
+                for sensor_config in config.get('sensors', []):
+                    pair_id = sensor_config['pair_id']
+                    distance = sensor_config['distance_from_fan']
+                    low_height = sensor_config['low_height']
+                    high_height = sensor_config['high_height']
+                    
+                    sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION)
+                    self.sensor_pairs.append(sensor_pair)
+                    self.fan_controller.add_sensor_pair(sensor_pair)
+                    
+                    self.sensor_list.addItem(
+                        f"Pair {pair_id}: {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
+                    )
                 
-                # Load simulation settings\n                sim_config = config.get('simulation', {})\n                self.spin_smokers.setValue(sim_config.get('num_smokers', DEFAULT_NUM_SMOKERS))\n                self.spin_speed.setValue(sim_config.get('simulation_speed', DEFAULT_SIMULATION_SPEED))\n                \n                fan_mode = sim_config.get('fan_mode', 'manual')\n                self.combo_fan_mode.setCurrentText('Automatic' if fan_mode == 'auto' else 'Manual')\n                
-                # Update renderer\n                self.renderer_3d.sensor_pairs = self.sensor_pairs\n                self.renderer_3d.update()
+                # Load simulation settings
+                sim_config = config.get('simulation', {})
+                self.spin_smokers.setValue(sim_config.get('num_smokers', DEFAULT_NUM_SMOKERS))
+                self.spin_speed.setValue(sim_config.get('simulation_speed', DEFAULT_SIMULATION_SPEED))
                 
-                QMessageBox.information(self, \"Success\", \"Configuration loaded successfully.\")
-            else:\n                QMessageBox.warning(self, \"Error\", \"Could not load configuration file.\")
+                fan_mode = sim_config.get('fan_mode', 'manual')
+                self.combo_fan_mode.setCurrentText('Automatic' if fan_mode == 'auto' else 'Manual')
+                
+                # Update renderer
+                self.renderer_3d.sensor_pairs = self.sensor_pairs
+                self.renderer_3d.update()
+                
+                QMessageBox.information(self, "Success", "Configuration loaded successfully.")
+            else:
+                QMessageBox.warning(self, "Error", "Could not load configuration file.")
     
     def _export_data(self):
-        \"\"\"Export data to CSV.\"\"\"\n        filepath = self.data_logger.export_to_csv()
+        """Export data to CSV."""
+        filepath = self.data_logger.export_to_csv()
         
-        if filepath:\n            QMessageBox.information(\n                self, \"Success\", \n                f\"Data exported successfully to:\\n{filepath}\"\n            )\n        else:\n            QMessageBox.warning(self, \"Error\", \"No data to export.\")
+        if filepath:
+            QMessageBox.information(
+                self, "Success", 
+                f"Data exported successfully to:\n{filepath}"
+            )
+        else:
+            QMessageBox.warning(self, "Error", "No data to export.")

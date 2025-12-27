@@ -43,3 +43,4 @@ configs/*.json
 
 # Logs
 *.log
+core

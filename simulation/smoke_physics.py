@@ -6,6 +6,7 @@ from utils.constants import (
     PARTICLES_PER_CIGAR_PER_SECOND, MAX_PARTICLES, SMOKER_HEIGHT,
     ROOM_WIDTH, ROOM_LENGTH, ROOM_HEIGHT
 )
+from simulation.cigar_model import CigarManager
 
 
 class SmokeParticle:
@@ -49,6 +50,9 @@ class SmokeSimulation:
         self.smoker_positions = np.zeros((0, 3), dtype=float)
         self.particle_generation_rate = PARTICLES_PER_CIGAR_PER_SECOND
         
+        # Cigar manager for realistic smoking behavior
+        self.cigar_manager = CigarManager(room)
+        
         # Performance tracking
         self.particles_generated = 0
         self.particles_removed = 0
@@ -64,6 +68,9 @@ class SmokeSimulation:
         """
         self.num_smokers = num_smokers
         self.smoker_positions = self.room.generate_smoker_positions(num_smokers, SMOKER_HEIGHT)
+        
+        # Initialize cigars for each smoker
+        self.cigar_manager.set_num_smokers(num_smokers, self.smoker_positions)
     
     def generate_particles(self, dt):
         """Generate new smoke particles from smokers.
@@ -74,43 +81,62 @@ class SmokeSimulation:
         if self.num_smokers == 0:
             return
         
-        # Calculate number of particles to generate
-        particles_per_step = self.particle_generation_rate * self.num_smokers * dt
-        self.particle_accumulator += particles_per_step
+        # Get smoke sources from cigar manager
+        smoke_sources = self.cigar_manager.get_smoke_sources()
         
-        num_new_particles = int(self.particle_accumulator)
-        self.particle_accumulator -= num_new_particles
-        
-        if num_new_particles == 0:
+        if len(smoke_sources) == 0:
             return
         
-        # Check if we're at max capacity
-        current_count = len(self.particles_positions)
-        if current_count + num_new_particles > MAX_PARTICLES:
-            num_new_particles = MAX_PARTICLES - current_count
-            if num_new_particles <= 0:
-                return
+        # Generate particles from each active cigar based on its current rate
+        new_positions_list = []
+        new_velocities_list = []
         
-        # Generate new particles from random smoker positions
-        smoker_indices = np.random.randint(0, self.num_smokers, size=num_new_particles)
-        new_positions = self.smoker_positions[smoker_indices].copy()
+        for position, rate in smoke_sources:
+            # Calculate particles to generate from this cigar
+            particles_from_cigar = rate * dt
+            self.particle_accumulator += particles_from_cigar
+            
+            num_particles = int(particles_from_cigar)
+            
+            if num_particles > 0:
+                # Check if we're at max capacity
+                current_count = len(self.particles_positions) + len(new_positions_list)
+                if current_count + num_particles > MAX_PARTICLES:
+                    num_particles = MAX_PARTICLES - current_count
+                    if num_particles <= 0:
+                        break
+                
+                # Generate particles at this cigar's position
+                cigar_positions = np.tile(position, (num_particles, 1))
+                
+                # Add small random offset to positions
+                cigar_positions += np.random.normal(0, 0.2, size=(num_particles, 3))
+                
+                # Initial velocity (slightly upward due to heat)
+                cigar_velocities = np.random.normal(0, 0.5, size=(num_particles, 3))
+                cigar_velocities[:, 1] += 1.0  # Upward bias
+                
+                new_positions_list.append(cigar_positions)
+                new_velocities_list.append(cigar_velocities)
         
-        # Add small random offset to positions
-        new_positions += np.random.normal(0, 0.2, size=(num_new_particles, 3))
+        # Accumulator management
+        accumulated_int = int(self.particle_accumulator)
+        self.particle_accumulator -= accumulated_int
         
-        # Initial velocity (slightly upward due to heat)
-        new_velocities = np.random.normal(0, 0.5, size=(num_new_particles, 3))
-        new_velocities[:, 1] += 1.0  # Upward bias
+        if len(new_positions_list) == 0:
+            return
         
-        # Ages
-        new_ages = np.zeros(num_new_particles)
+        # Combine all new particles
+        new_positions = np.vstack(new_positions_list)
+        new_velocities = np.vstack(new_velocities_list)
+        new_ages = np.zeros(len(new_positions))
         
         # Append to existing arrays
         self.particles_positions = np.vstack([self.particles_positions, new_positions])
         self.particles_velocities = np.vstack([self.particles_velocities, new_velocities])
         self.particles_ages = np.concatenate([self.particles_ages, new_ages])
         
-        self.particles_generated += num_new_particles
+        self.particles_generated += len(new_positions)
     
     def apply_physics(self, dt):
         """Apply physics forces to all particles.
@@ -122,29 +148,36 @@ class SmokeSimulation:
             return
         
         # 1. Buoyancy (upward force due to temperature difference)
+        # Smoke rises SLOWLY due to being warmer than ambient air
         buoyancy = np.zeros_like(self.particles_velocities)
         buoyancy[:, 1] = BUOYANCY_FACTOR * GRAVITY
         
-        # 2. Diffusion (random walk)
+        # Reduce buoyancy for older particles (as they cool and equilibrate)
+        # But never apply downward force - smoke doesn't fall
+        age_factor = np.clip(1.0 - (self.particles_ages / 600.0), 0.3, 1.0)  # Keep 30% buoyancy even when old
+        buoyancy[:, 1] *= age_factor.reshape(-1)
+        
+        # 2. Diffusion (random walk for spreading)
+        # Stronger horizontal diffusion to model air currents and mixing
         diffusion = np.random.normal(0, DIFFUSION_COEFFICIENT, size=self.particles_velocities.shape)
+        # Reduce vertical diffusion to keep smoke more stable at its level
+        diffusion[:, 1] *= 0.3
         
         # 3. Fan suction (advection toward fan)
         fan_velocities = self.fan.calculate_velocity_field(self.particles_positions)
         
-        # 4. Gravity (slight downward force on cooler particles)
-        # Older particles cool down
-        cooling_factor = np.clip(self.particles_ages / 60.0, 0, 1)  # Cool over 1 minute
-        gravity = np.zeros_like(self.particles_velocities)
-        gravity[:, 1] = -GRAVITY * 0.1 * cooling_factor
+        # NOTE: No gravity applied to smoke particles
+        # Smoke does NOT fall - it lingers and gradually rises
         
         # Combine forces
-        acceleration = buoyancy + diffusion + fan_velocities + gravity
+        acceleration = buoyancy + diffusion + fan_velocities
         
         # Update velocities
         self.particles_velocities += acceleration * dt
         
-        # Apply damping (air resistance)
-        damping = 0.95
+        # Apply stronger damping for realistic slow motion
+        # This makes smoke linger at its current level while drifting slowly
+        damping = 0.90  # Increased damping (was 0.95) for more stable behavior
         self.particles_velocities *= damping
         
         # Update positions
@@ -226,6 +259,9 @@ class SmokeSimulation:
         Args:
             dt: Time step in seconds
         """
+        # Update cigar states (puffing, burn time, etc.)
+        self.cigar_manager.update(dt)
+        
         # Generate new particles
         self.generate_particles(dt)
         
@@ -288,6 +324,7 @@ class SmokeSimulation:
         self.particles_generated = 0
         self.particles_removed = 0
         self.particle_accumulator = 0.0
+        self.cigar_manager.reset()
     
     def get_statistics(self):
         """Get simulation statistics.
