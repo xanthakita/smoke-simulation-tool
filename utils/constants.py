@@ -36,9 +36,32 @@ MAX_PARTICLES = 100000  # Maximum particles in simulation
 
 # Physics constants
 GRAVITY = 32.174  # ft/s² (downward) - NOTE: Not applied to smoke particles
-BUOYANCY_FACTOR = 0.15  # Upward force factor - smoke rises slowly (increased from 0.03)
-DIFFUSION_COEFFICIENT = 0.25  # ft²/s (random dispersion for horizontal spreading)
+BUOYANCY_FACTOR = 0.15  # Base upward force factor - modified by height-dependent multipliers
+DIFFUSION_COEFFICIENT = 0.25  # ft²/s (random dispersion, multiplied by directional factors)
 TIME_STEP = 0.1  # seconds per simulation step
+
+# Height-Dependent Smoke Physics Parameters
+# These parameters create realistic smoke stratification matching observed cigar lounge behavior
+#
+# BUOYANCY ZONES (applied as multipliers to BUOYANCY_FACTOR):
+#   0-4 feet:   1.0x  - Moderate buoyancy (smoke rises from source)
+#   4-8 feet:   0.05x - Very low buoyancy (HOVER ZONE - smoke lingers)
+#   8-14 feet:  0.20x - Weak buoyancy (slow gradual rise)
+#   14-18 feet: 0.08x - Very weak buoyancy (reaches slowly)
+#   18+ feet:   0.02x - Minimal/zero buoyancy (rarely reaches ceiling)
+#
+# VERTICAL DAMPING ZONES (applied to vertical velocity component):
+#   0-4 feet:   0.93 - Low damping (smoke rises freely)
+#   4-8 feet:   0.75 - High damping (HOVER ZONE creates slowdown)
+#   8-14 feet:  0.70 - Very high damping (strong slowdown)
+#   14-18 feet: 0.60 - Extreme damping (much harder to reach)
+#   18+ feet:   0.50 - Maximum damping (prevents ceiling rush)
+#
+# HORIZONTAL SPREAD PARAMETERS:
+#   Initial velocity std: 2.5 ft/s (X and Z axes)
+#   Diffusion multipliers: 3.5x (X and Z), 0.15x (Y)
+#   Expected spread: 15-20 feet horizontal radius from each cigar
+#   Horizontal damping: 0.92 (allows continued spreading)
 
 # Sensor properties
 SENSOR_DETECTION_RADIUS = 1.0  # feet (volume around sensor that detects particles)

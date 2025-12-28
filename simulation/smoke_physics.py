@@ -60,6 +60,10 @@ class SmokeSimulation:
         # Accumulator for fractional particles
         self.particle_accumulator = 0.0
         
+        # Debug tracking for height distribution
+        self.last_height_print_time = 0.0
+        self.height_print_interval = 30.0  # Print every 30 seconds
+        
     def set_num_smokers(self, num_smokers):
         """Set number of active smokers.
         
@@ -109,12 +113,22 @@ class SmokeSimulation:
                 # Generate particles at this cigar's position
                 cigar_positions = np.tile(position, (num_particles, 1))
                 
-                # Add small random offset to positions
-                cigar_positions += np.random.normal(0, 0.2, size=(num_particles, 3))
+                # Add random offset to positions for initial spread
+                # Much larger horizontal spread for realistic 15-20 feet dispersion
+                position_offset = np.random.normal(0, 0.8, size=(num_particles, 3))
+                position_offset[:, 1] *= 0.3  # Less vertical spread
+                cigar_positions += position_offset
                 
-                # Initial velocity (slightly upward due to heat)
-                cigar_velocities = np.random.normal(0, 0.5, size=(num_particles, 3))
-                cigar_velocities[:, 1] += 1.0  # Upward bias
+                # Initial velocity with VERY STRONG horizontal components
+                # Smoke should spread out in a wide cone/plume shape (15-20 feet)
+                cigar_velocities = np.zeros((num_particles, 3))
+                
+                # Very strong horizontal velocities (X and Z) for wide spread
+                cigar_velocities[:, 0] = np.random.normal(0, 2.5, size=num_particles)
+                cigar_velocities[:, 2] = np.random.normal(0, 2.5, size=num_particles)
+                
+                # Moderate upward velocity
+                cigar_velocities[:, 1] = np.random.uniform(0.5, 2.0, size=num_particles)
                 
                 new_positions_list.append(cigar_positions)
                 new_velocities_list.append(cigar_velocities)
@@ -138,6 +152,91 @@ class SmokeSimulation:
         
         self.particles_generated += len(new_positions)
     
+    def _calculate_height_dependent_buoyancy(self, heights):
+        """Calculate height-dependent buoyancy factors based on Y-coordinate.
+        
+        Creates realistic stratification zones:
+        - 0-4 feet: Moderate buoyancy (1.0x - smoke rises from source)
+        - 4-8 feet: Very low buoyancy (0.05x - HOVER ZONE, smoke lingers)
+        - 8-14 feet: Weak buoyancy (0.20x - slow gradual rise)
+        - 14-18 feet: Very weak buoyancy (0.08x - reaches slowly)
+        - Above 18 feet: Minimal/zero buoyancy (0.02x - rarely reaches ceiling)
+        
+        Args:
+            heights: numpy array of Y-coordinates
+            
+        Returns:
+            numpy array of buoyancy multipliers for each particle
+        """
+        buoyancy_multipliers = np.ones_like(heights)
+        
+        # Zone 1: 0-4 feet - Moderate buoyancy (1.0x)
+        # Smoke rises from cigar
+        mask_zone1 = heights < 4.0
+        buoyancy_multipliers[mask_zone1] = 1.0
+        
+        # Zone 2: 4-8 feet - Very low buoyancy (0.05x) - HOVER ZONE
+        # Smoke hovers and lingers here (reduced from 0.1 to 0.05)
+        mask_zone2 = (heights >= 4.0) & (heights < 8.0)
+        buoyancy_multipliers[mask_zone2] = 0.05
+        
+        # Zone 3: 8-14 feet - Weak buoyancy (0.20x)
+        # Slow gradual rise (adjusted to 0.20 for better upper zone reach)
+        mask_zone3 = (heights >= 8.0) & (heights < 14.0)
+        buoyancy_multipliers[mask_zone3] = 0.20
+        
+        # Zone 4: 14-18 feet - Very weak buoyancy (0.08x)
+        # Smoke reaches this range slowly (reduced from 0.15 to 0.08)
+        mask_zone4 = (heights >= 14.0) & (heights < 18.0)
+        buoyancy_multipliers[mask_zone4] = 0.08
+        
+        # Zone 5: Above 18 feet - Minimal/zero buoyancy (0.02x)
+        # Smoke rarely reaches ceiling (reduced from 0.05 to 0.02)
+        mask_zone5 = heights >= 18.0
+        buoyancy_multipliers[mask_zone5] = 0.02
+        
+        return buoyancy_multipliers
+    
+    def _calculate_height_dependent_vertical_damping(self, heights):
+        """Calculate height-dependent vertical velocity damping.
+        
+        Damping increases with height to slow down smoke rise and create hovering effect.
+        Lower heights have less damping (smoke rises), higher heights have more damping (smoke slows).
+        
+        Args:
+            heights: numpy array of Y-coordinates
+            
+        Returns:
+            numpy array of damping factors for vertical velocity
+        """
+        damping_factors = np.ones_like(heights)
+        
+        # Zone 1: 0-4 feet - Low damping (0.93) - smoke rises freely
+        mask_zone1 = heights < 4.0
+        damping_factors[mask_zone1] = 0.93
+        
+        # Zone 2: 4-8 feet - High damping (0.75) - HOVER ZONE
+        # Strong damping makes smoke slow down and hover (increased from 0.80)
+        mask_zone2 = (heights >= 4.0) & (heights < 8.0)
+        damping_factors[mask_zone2] = 0.75
+        
+        # Zone 3: 8-14 feet - Very high damping (0.70)
+        # Strong slowdown of rise from hover zone (increased from 0.85)
+        mask_zone3 = (heights >= 8.0) & (heights < 14.0)
+        damping_factors[mask_zone3] = 0.70
+        
+        # Zone 4: 14-18 feet - Extreme damping (0.60)
+        # Makes it much harder to reach this range (increased from 0.75)
+        mask_zone4 = (heights >= 14.0) & (heights < 18.0)
+        damping_factors[mask_zone4] = 0.60
+        
+        # Zone 5: Above 18 feet - Maximum damping (0.50)
+        # Strongly prevents smoke from rushing to ceiling (increased from 0.70)
+        mask_zone5 = heights >= 18.0
+        damping_factors[mask_zone5] = 0.50
+        
+        return damping_factors
+    
     def apply_physics(self, dt):
         """Apply physics forces to all particles.
         
@@ -147,21 +246,33 @@ class SmokeSimulation:
         if len(self.particles_positions) == 0:
             return
         
-        # 1. Buoyancy (upward force due to temperature difference)
-        # Smoke rises SLOWLY due to being warmer than ambient air
+        # Get particle heights (Y-coordinates)
+        heights = self.particles_positions[:, 1]
+        
+        # 1. Height-Dependent Buoyancy (upward force due to temperature difference)
+        # Smoke rises with varying strength depending on height
         buoyancy = np.zeros_like(self.particles_velocities)
-        buoyancy[:, 1] = BUOYANCY_FACTOR * GRAVITY
+        
+        # Base buoyancy force
+        base_buoyancy = BUOYANCY_FACTOR * GRAVITY
+        
+        # Apply height-dependent buoyancy multipliers
+        height_multipliers = self._calculate_height_dependent_buoyancy(heights)
+        buoyancy[:, 1] = base_buoyancy * height_multipliers
         
         # Reduce buoyancy for older particles (as they cool and equilibrate)
         # But never apply downward force - smoke doesn't fall
         age_factor = np.clip(1.0 - (self.particles_ages / 600.0), 0.3, 1.0)  # Keep 30% buoyancy even when old
-        buoyancy[:, 1] *= age_factor.reshape(-1)
+        buoyancy[:, 1] *= age_factor
         
         # 2. Diffusion (random walk for spreading)
-        # Stronger horizontal diffusion to model air currents and mixing
+        # Very strong horizontal diffusion to model air currents and achieve 15-20 feet spread
         diffusion = np.random.normal(0, DIFFUSION_COEFFICIENT, size=self.particles_velocities.shape)
+        # Significantly increase horizontal diffusion for realistic wide spread
+        diffusion[:, 0] *= 3.5  # X-axis diffusion (increased from 2.0)
+        diffusion[:, 2] *= 3.5  # Z-axis diffusion (increased from 2.0)
         # Reduce vertical diffusion to keep smoke more stable at its level
-        diffusion[:, 1] *= 0.3
+        diffusion[:, 1] *= 0.15  # Further reduced to encourage horizontal spread
         
         # 3. Fan suction (advection toward fan)
         fan_velocities = self.fan.calculate_velocity_field(self.particles_positions)
@@ -175,10 +286,16 @@ class SmokeSimulation:
         # Update velocities
         self.particles_velocities += acceleration * dt
         
-        # Apply stronger damping for realistic slow motion
-        # This makes smoke linger at its current level while drifting slowly
-        damping = 0.90  # Increased damping (was 0.95) for more stable behavior
-        self.particles_velocities *= damping
+        # Apply height-dependent damping for realistic smoke behavior
+        # Horizontal damping stays moderate to allow spread
+        horizontal_damping = 0.92
+        self.particles_velocities[:, 0] *= horizontal_damping
+        self.particles_velocities[:, 2] *= horizontal_damping
+        
+        # Vertical damping increases with height to slow down smoke rise
+        # This creates the hovering effect and prevents rushing to ceiling
+        vertical_damping = self._calculate_height_dependent_vertical_damping(heights)
+        self.particles_velocities[:, 1] *= vertical_damping
         
         # Update positions
         self.particles_positions += self.particles_velocities * dt
@@ -273,6 +390,11 @@ class SmokeSimulation:
         
         # Update time
         self.time += dt
+        
+        # Print height distribution periodically for debugging
+        if self.time - self.last_height_print_time >= self.height_print_interval:
+            self.print_height_distribution()
+            self.last_height_print_time = self.time
     
     def get_particle_count(self):
         """Get current number of particles.
@@ -324,7 +446,63 @@ class SmokeSimulation:
         self.particles_generated = 0
         self.particles_removed = 0
         self.particle_accumulator = 0.0
+        self.last_height_print_time = 0.0
         self.cigar_manager.reset()
+    
+    def get_height_distribution(self):
+        """Calculate particle distribution across height zones.
+        
+        Returns:
+            Dictionary with particle counts in each height zone
+        """
+        if len(self.particles_positions) == 0:
+            return {
+                'zone_0_4': 0,
+                'zone_4_8': 0,
+                'zone_8_14': 0,
+                'zone_14_18': 0,
+                'zone_18_plus': 0,
+                'total': 0
+            }
+        
+        heights = self.particles_positions[:, 1]
+        
+        zone_0_4 = np.sum(heights < 4.0)
+        zone_4_8 = np.sum((heights >= 4.0) & (heights < 8.0))
+        zone_8_14 = np.sum((heights >= 8.0) & (heights < 14.0))
+        zone_14_18 = np.sum((heights >= 14.0) & (heights < 18.0))
+        zone_18_plus = np.sum(heights >= 18.0)
+        
+        return {
+            'zone_0_4': int(zone_0_4),
+            'zone_4_8': int(zone_4_8),
+            'zone_8_14': int(zone_8_14),
+            'zone_14_18': int(zone_14_18),
+            'zone_18_plus': int(zone_18_plus),
+            'total': len(self.particles_positions)
+        }
+    
+    def print_height_distribution(self):
+        """Print particle height distribution to console for debugging."""
+        dist = self.get_height_distribution()
+        
+        if dist['total'] == 0:
+            return
+        
+        # Calculate percentages
+        pct_0_4 = (dist['zone_0_4'] / dist['total']) * 100
+        pct_4_8 = (dist['zone_4_8'] / dist['total']) * 100
+        pct_8_14 = (dist['zone_8_14'] / dist['total']) * 100
+        pct_14_18 = (dist['zone_14_18'] / dist['total']) * 100
+        pct_18_plus = (dist['zone_18_plus'] / dist['total']) * 100
+        
+        print(f"\n📊 SMOKE HEIGHT DISTRIBUTION @ t={self.time:.1f}s")
+        print(f"   Total particles: {dist['total']}")
+        print(f"   0-4 ft (rise zone):     {dist['zone_0_4']:6d} ({pct_0_4:5.1f}%)")
+        print(f"   4-8 ft (HOVER ZONE):    {dist['zone_4_8']:6d} ({pct_4_8:5.1f}%) ⭐")
+        print(f"   8-14 ft (slow rise):    {dist['zone_8_14']:6d} ({pct_8_14:5.1f}%)")
+        print(f"   14-18 ft (upper zone):  {dist['zone_14_18']:6d} ({pct_14_18:5.1f}%)")
+        print(f"   18+ ft (near ceiling):  {dist['zone_18_plus']:6d} ({pct_18_plus:5.1f}%)")
     
     def get_statistics(self):
         """Get simulation statistics.
@@ -332,7 +510,7 @@ class SmokeSimulation:
         Returns:
             Dictionary with simulation statistics
         """
-        return {
+        stats = {
             'time': self.time,
             'particle_count': self.get_particle_count(),
             'particles_generated': self.particles_generated,
@@ -341,3 +519,8 @@ class SmokeSimulation:
             'avg_ppm': self.calculate_room_average_ppm(),
             'avg_clarity': self.calculate_room_average_clarity()
         }
+        
+        # Add height distribution to statistics
+        stats.update(self.get_height_distribution())
+        
+        return stats

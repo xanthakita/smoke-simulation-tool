@@ -1,34 +1,45 @@
 """Cigar smoking behavior model."""
 
 import numpy as np
+from datetime import datetime
 
 
 class Cigar:
     """Represents an individual cigar being smoked."""
     
-    def __init__(self, position, cigar_id=0):
+    def __init__(self, position, cigar_id=0, stagger_start=True):
         """Initialize a cigar.
         
         Args:
             position: numpy array [x, y, z] position of the smoker
             cigar_id: Unique identifier for this cigar
+            stagger_start: If True, start with random age between 0-50 minutes
         """
         self.id = cigar_id
         self.position = np.array(position, dtype=float)
-        self.age = 0.0  # Time since lit (seconds)
         self.burn_time = 50.0 * 60.0  # 50 minutes in seconds
+        
+        # Stagger initial ages to simulate cigars at different burn stages
+        if stagger_start:
+            self.age = np.random.uniform(0.0, self.burn_time)  # Random age 0-50 minutes
+            age_minutes = int(self.age / 60)
+            print(f"[INIT] Cigar #{cigar_id} starting at age {age_minutes} minutes (staggered start)")
+        else:
+            self.age = 0.0  # Time since lit (seconds)
+            print(f"[INIT] Cigar #{cigar_id} starting fresh at age 0 minutes")
+        
         self.is_active = True
         
         # Puff timing
-        self.time_since_last_puff = 0.0
+        self.time_since_last_puff = np.random.uniform(0.0, 30.0)  # Random start in puff cycle
         self.next_puff_interval = self._generate_puff_interval()
         self.is_puffing = False
-        self.puff_duration = 3.0  # Puff lasts 3 seconds
+        self.puff_duration = 4.0  # Puff lasts 4 seconds (longer for visibility)
         self.puff_timer = 0.0
         
         # Smoke generation rates
         self.baseline_rate = 100  # Particles per second between puffs
-        self.puff_rate = 2000  # Particles per second during puff
+        self.puff_rate = 6000  # Particles per second during puff (30x baseline for dramatic effect!)
         
     def _generate_puff_interval(self):
         """Generate random interval until next puff (0.5 to 3 minutes).
@@ -64,12 +75,16 @@ class Cigar:
                 self.puff_timer = 0.0
                 self.next_puff_interval = self._generate_puff_interval()
                 self.time_since_last_puff = 0.0
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Cigar #{self.id} - Puff ended")
         else:
             self.time_since_last_puff += dt
             if self.time_since_last_puff >= self.next_puff_interval:
                 # Start new puff
                 self.is_puffing = True
                 self.puff_timer = 0.0
+                # Log puff event to console for debugging
+                age_minutes = int(self.age / 60)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 💨 PUFF EVENT! Cigar #{self.id} at position {self.position} (age: {age_minutes} min)")
     
     def get_smoke_generation_rate(self):
         """Get current smoke generation rate based on cigar state.
