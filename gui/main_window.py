@@ -401,6 +401,20 @@ class MainWindow(QMainWindow):
         self.btn_pause.setEnabled(True)
         self.timer.start()
         
+        # Print debug information
+        print("\n" + "=" * 60)
+        print("SIMULATION STARTED - CONFIGURATION")
+        print("=" * 60)
+        print(f"Fan Position: X={FAN_POSITION[0]} ft, Y={FAN_POSITION[1]} ft, Z={FAN_POSITION[2]} ft")
+        print(f"  (Left wall, {FAN_POSITION[1]} ft high, {FAN_POSITION[2]} ft from front wall)")
+        print(f"\nSensor Pairs: {len(self.sensor_pairs)}")
+        for pair in self.sensor_pairs:
+            wall_name = "Front Wall" if pair.wall == 'front' else "Back Wall"
+            print(f"  Pair {pair.pair_id} ({wall_name}):")
+            print(f"    Low:  X={pair.low_sensor.position[0]:.1f}, Y={pair.low_sensor.position[1]:.1f}, Z={pair.low_sensor.position[2]:.1f}")
+            print(f"    High: X={pair.high_sensor.position[0]:.1f}, Y={pair.high_sensor.position[1]:.1f}, Z={pair.high_sensor.position[2]:.1f}")
+        print("=" * 60 + "\n")
+        
         # Initialize smokers if not already done
         if self.smoke_sim.num_smokers == 0:
             self._update_num_smokers()
@@ -483,6 +497,11 @@ class MainWindow(QMainWindow):
         sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
         self.sensor_pairs.append(sensor_pair)
         self.fan_controller.add_sensor_pair(sensor_pair)
+        
+        # Print debug info
+        print(f"\n✓ Added Sensor Pair {pair_id} on {wall_text}:")
+        print(f"  Low:  X={sensor_pair.low_sensor.position[0]:.1f}, Y={sensor_pair.low_sensor.position[1]:.1f}, Z={sensor_pair.low_sensor.position[2]:.1f}")
+        print(f"  High: X={sensor_pair.high_sensor.position[0]:.1f}, Y={sensor_pair.high_sensor.position[1]:.1f}, Z={sensor_pair.high_sensor.position[2]:.1f}")
         
         # Update list with wall information
         self.sensor_list.addItem(
