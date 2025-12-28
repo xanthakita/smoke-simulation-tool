@@ -67,20 +67,27 @@ class Renderer3D(QWidget):
     def _setup_axes(self):
         """Setup 3D axes with appropriate limits and styling.
         
-        Coordinate system:
-        - X-axis: Width (0-30 ft) - horizontal left/right
-        - Y-axis: Height (0-20 ft) - vertical up/down
-        - Z-axis: Length (0-75 ft) - horizontal front/back (depth)
-        """
-        # Set axis limits with correct room dimensions
-        self.ax.set_xlim(0, ROOM_WIDTH)   # 0-30 ft (Width)
-        self.ax.set_ylim(0, ROOM_HEIGHT)  # 0-20 ft (Height - VERTICAL)
-        self.ax.set_zlim(0, ROOM_LENGTH)  # 0-75 ft (Length/Depth)
+        COORDINATE SYSTEM & MATPLOTLIB MAPPING:
+        =======================================
+        Data is stored as [x, y, z] where:
+          - x (index 0): Width (0-30 ft)
+          - y (index 1): Height (0-20 ft)
+          - z (index 2): Length (0-75 ft)
         
-        # Set labels with clear dimension indicators
+        Matplotlib 3D axes have Z as VERTICAL by default, so we swap Y and Z:
+          - matplotlib X-axis (horizontal): Width (0-30 ft) ← data[0]
+          - matplotlib Y-axis (depth): Length (0-75 ft) ← data[2]
+          - matplotlib Z-axis (VERTICAL): Height (0-20 ft) ← data[1]
+        """
+        # Set axis limits with Y and Z swapped for matplotlib
+        self.ax.set_xlim(0, ROOM_WIDTH)   # X: Width (0-30 ft)
+        self.ax.set_ylim(0, ROOM_LENGTH)  # Y: Length (0-75 ft, depth)
+        self.ax.set_zlim(0, ROOM_HEIGHT)  # Z: Height (0-20 ft, VERTICAL)
+        
+        # Set labels (matplotlib Y is depth, Z is vertical)
         self.ax.set_xlabel('Width (ft)', color='white', fontsize=10, labelpad=8)
-        self.ax.set_ylabel('Height (ft)', color='white', fontsize=10, labelpad=8)
-        self.ax.set_zlabel('Length (ft)', color='white', fontsize=10, labelpad=8)
+        self.ax.set_ylabel('Length (ft)', color='white', fontsize=10, labelpad=8)  # Depth
+        self.ax.set_zlabel('Height (ft)', color='white', fontsize=10, labelpad=8)  # Vertical
         
         # Set title with room dimensions
         title = f'3D Smoke Simulation View\nRoom: {ROOM_WIDTH:.0f}ft (W) × {ROOM_HEIGHT:.0f}ft (H) × {ROOM_LENGTH:.0f}ft (L)'
@@ -100,15 +107,15 @@ class Renderer3D(QWidget):
         # Tick label colors
         self.ax.tick_params(colors='white', labelsize=8)
         
-        # Set initial view angle to show room upright
+        # Set initial view angle to show room upright with height vertical
         # elevation=20: look down from slightly above
         # azimuth=-60: view from front-left corner (shows width, height, and depth)
         self.ax.view_init(elev=self.camera_elevation, azim=self.camera_azimuth)
         
         # Force equal aspect ratio to prevent distortion
-        # This helps maintain proper room proportions
+        # matplotlib axes are [X, Y, Z] = [Width, Length, Height]
         try:
-            self.ax.set_box_aspect([ROOM_WIDTH, ROOM_HEIGHT, ROOM_LENGTH])
+            self.ax.set_box_aspect([ROOM_WIDTH, ROOM_LENGTH, ROOM_HEIGHT])
         except:
             # Fallback for older matplotlib versions
             pass
@@ -157,94 +164,107 @@ class Renderer3D(QWidget):
         self.canvas.draw_idle()
         
     def _draw_room(self):
-        """Draw room boundaries with correct coordinate mapping.
+        """Draw room boundaries with Y/Z swapped for matplotlib.
         
-        Coordinate system:
-        - X: Width (0-30 ft) - left/right
-        - Y: Height (0-20 ft) - floor/ceiling (VERTICAL)
-        - Z: Length (0-75 ft) - front/back (depth)
-        
-        Room corners:
-        - Front-left-bottom: (0, 0, 0)
-        - Front-right-bottom: (30, 0, 0)
-        - Back-right-bottom: (30, 0, 75)
-        - Back-left-bottom: (0, 0, 75)
-        - Front-left-top: (0, 20, 0)
-        - Front-right-top: (30, 20, 0)
-        - Back-right-top: (30, 20, 75)
-        - Back-left-top: (0, 20, 75)
+        Data: [x, y, z] = [Width, Height, Length]
+        Plot to matplotlib with Y/Z swapped: [x, z, y]
+        - matplotlib X: Width
+        - matplotlib Y: Length (depth)
+        - matplotlib Z: Height (VERTICAL)
         """
         if self._room_lines is not None:
             return  # Already drawn
         
-        # Define room edges (bottom and top rectangles + vertical edges)
-        # Format: [[x1, y1, z1], [x2, y2, z2]]
-        edges = [
-            # FLOOR (Y=0) - Bottom rectangle
-            [[0, 0, 0], [ROOM_WIDTH, 0, 0]],              # Front edge (width)
-            [[ROOM_WIDTH, 0, 0], [ROOM_WIDTH, 0, ROOM_LENGTH]],  # Right edge (length)
-            [[ROOM_WIDTH, 0, ROOM_LENGTH], [0, 0, ROOM_LENGTH]], # Back edge (width)
-            [[0, 0, ROOM_LENGTH], [0, 0, 0]],             # Left edge (length)
-            
-            # CEILING (Y=ROOM_HEIGHT) - Top rectangle  
-            [[0, ROOM_HEIGHT, 0], [ROOM_WIDTH, ROOM_HEIGHT, 0]],  # Front edge
-            [[ROOM_WIDTH, ROOM_HEIGHT, 0], [ROOM_WIDTH, ROOM_HEIGHT, ROOM_LENGTH]],  # Right edge
-            [[ROOM_WIDTH, ROOM_HEIGHT, ROOM_LENGTH], [0, ROOM_HEIGHT, ROOM_LENGTH]], # Back edge
-            [[0, ROOM_HEIGHT, ROOM_LENGTH], [0, ROOM_HEIGHT, 0]],  # Left edge
-            
-            # VERTICAL EDGES (connecting floor to ceiling)
-            [[0, 0, 0], [0, ROOM_HEIGHT, 0]],                     # Front-left corner
-            [[ROOM_WIDTH, 0, 0], [ROOM_WIDTH, ROOM_HEIGHT, 0]],   # Front-right corner
-            [[ROOM_WIDTH, 0, ROOM_LENGTH], [ROOM_WIDTH, ROOM_HEIGHT, ROOM_LENGTH]],  # Back-right corner
-            [[0, 0, ROOM_LENGTH], [0, ROOM_HEIGHT, ROOM_LENGTH]], # Back-left corner
+        # Define room corners in DATA coords [x, y, z]  = [Width, Height, Length]
+        # Convert to matplotlib coords [X, Y, Z] by swapping y and z
+        def to_mpl(x, y, z):
+            """Convert data [x, y, z] to matplotlib [X, Y, Z] = [x, z, y]"""
+            return (x, z, y)
+        
+        # FLOOR (data y=0, all corners at ground level)
+        floor_corners = [
+            to_mpl(0, 0, 0),                      # Front-left-bottom
+            to_mpl(ROOM_WIDTH, 0, 0),             # Front-right-bottom
+            to_mpl(ROOM_WIDTH, 0, ROOM_LENGTH),   # Back-right-bottom
+            to_mpl(0, 0, ROOM_LENGTH),            # Back-left-bottom
         ]
         
-        # Draw room edges
-        for edge in edges:
-            xs = [edge[0][0], edge[1][0]]
-            ys = [edge[0][1], edge[1][1]]
-            zs = [edge[0][2], edge[1][2]]
-            line = self.ax.plot(xs, ys, zs, color=COLOR_ROOM, linewidth=2, alpha=0.7)[0]
+        # CEILING (data y=ROOM_HEIGHT, all corners at ceiling)
+        ceiling_corners = [
+            to_mpl(0, ROOM_HEIGHT, 0),
+            to_mpl(ROOM_WIDTH, ROOM_HEIGHT, 0),
+            to_mpl(ROOM_WIDTH, ROOM_HEIGHT, ROOM_LENGTH),
+            to_mpl(0, ROOM_HEIGHT, ROOM_LENGTH),
+        ]
+        
+        # Draw floor edges
+        for i in range(4):
+            next_i = (i + 1) % 4
+            x1, y1, z1 = floor_corners[i]
+            x2, y2, z2 = floor_corners[next_i]
+            line = self.ax.plot([x1, x2], [y1, y2], [z1, z2], 
+                               color=COLOR_ROOM, linewidth=2, alpha=0.7)[0]
             if self._room_lines is None:
                 self._room_lines = [line]
             else:
                 self._room_lines.append(line)
         
-        # Draw floor grid (on Y=0 plane)
-        # Grid lines parallel to length (Z-axis) at regular X intervals
-        grid_spacing = 5
-        for i in range(0, int(ROOM_WIDTH) + 1, grid_spacing):
-            xs = [i, i]           # X position (constant across line)
-            ys = [0, 0]           # Floor level (Y=0)
-            zs = [0, ROOM_LENGTH] # Full length (Z from 0 to 75)
-            line = self.ax.plot(xs, ys, zs, color='#4a4a55', linewidth=0.5, alpha=0.3)[0]
+        # Draw ceiling edges
+        for i in range(4):
+            next_i = (i + 1) % 4
+            x1, y1, z1 = ceiling_corners[i]
+            x2, y2, z2 = ceiling_corners[next_i]
+            line = self.ax.plot([x1, x2], [y1, y2], [z1, z2],
+                               color=COLOR_ROOM, linewidth=2, alpha=0.7)[0]
             self._room_lines.append(line)
         
-        # Grid lines parallel to width (X-axis) at regular Z intervals    
+        # Draw vertical edges connecting floor to ceiling
+        for i in range(4):
+            x1, y1, z1 = floor_corners[i]
+            x2, y2, z2 = ceiling_corners[i]
+            line = self.ax.plot([x1, x2], [y1, y2], [z1, z2],
+                               color=COLOR_ROOM, linewidth=2, alpha=0.7)[0]
+            self._room_lines.append(line)
+        
+        # Draw floor grid (at floor level, data y=0, matplotlib z=0)
+        grid_spacing = 5
+        
+        # Grid lines parallel to Length (data z-axis) at regular Width intervals
+        for i in range(0, int(ROOM_WIDTH) + 1, grid_spacing):
+            x1, y1, z1 = to_mpl(i, 0, 0)
+            x2, y2, z2 = to_mpl(i, 0, ROOM_LENGTH)
+            line = self.ax.plot([x1, x2], [y1, y2], [z1, z2],
+                               color='#4a4a55', linewidth=0.5, alpha=0.3)[0]
+            self._room_lines.append(line)
+        
+        # Grid lines parallel to Width (data x-axis) at regular Length intervals
         for i in range(0, int(ROOM_LENGTH) + 1, grid_spacing):
-            xs = [0, ROOM_WIDTH]  # Full width (X from 0 to 30)
-            ys = [0, 0]           # Floor level (Y=0)
-            zs = [i, i]           # Z position (constant across line)
-            line = self.ax.plot(xs, ys, zs, color='#4a4a55', linewidth=0.5, alpha=0.3)[0]
+            x1, y1, z1 = to_mpl(0, 0, i)
+            x2, y2, z2 = to_mpl(ROOM_WIDTH, 0, i)
+            line = self.ax.plot([x1, x2], [y1, y2], [z1, z2],
+                               color='#4a4a55', linewidth=0.5, alpha=0.3)[0]
             self._room_lines.append(line)
     
     def _draw_fan(self):
-        """Draw exhaust fan on back wall.
+        """Draw exhaust fan with Y/Z swapped for matplotlib.
         
-        Fan position: [5.0, 15.0, 75.0]
-        - X = 5 ft from left wall
-        - Y = 15 ft up from floor
-        - Z = 75 ft (on back wall)
+        Fan position in data: [x, y, z] = [5, 15, 75] (Width, Height, Length)
+        Plot to matplotlib: [X, Y, Z] = [5, 75, 15] (x, z, y swapped)
         
-        Fan circle is drawn in XY plane at Z=75 (perpendicular to back wall)
+        Fan circle perpendicular to back wall (in XZ plane of matplotlib)
         """
         if not self.fan:
             return
         
-        pos = self.fan.position  # [X, Y, Z] = [5, 15, 75]
+        pos = self.fan.position  # [x, y, z] = [Width, Height, Length]
         radius = self.fan.radius
         
-        # Fan color based on speed (brighter when running faster)
+        # Convert to matplotlib coords (swap y and z)
+        mpl_x = pos[0]  # Width → X
+        mpl_y = pos[2]  # Length → Y (depth)
+        mpl_z = pos[1]  # Height → Z (vertical)
+        
+        # Fan color based on speed
         intensity = self.fan.speed_percent / 100.0
         color = (
             COLOR_FAN[0] * (0.3 + 0.7 * intensity),
@@ -252,85 +272,92 @@ class Renderer3D(QWidget):
             COLOR_FAN[2] * (0.3 + 0.7 * intensity)
         )
         
-        # Draw fan circle (in XY plane at Z=75, since fan is on back wall)
+        # Draw fan circle (in XZ plane of matplotlib, Y constant at back)
         segments = 24
         angles = np.linspace(0, 2 * np.pi, segments + 1)
         
-        # Fan circle coordinates - circle in XY plane, constant Z
-        circle_x = pos[0] + radius * np.cos(angles)  # X varies around center
-        circle_y = pos[1] + radius * np.sin(angles)  # Y varies around center
-        circle_z = np.full(segments + 1, pos[2])      # Z constant at back wall (75)
+        # Fan circle coordinates (varies in X and Z, constant Y)
+        circle_x = mpl_x + radius * np.cos(angles)  # Horizontal
+        circle_z = mpl_z + radius * np.sin(angles)  # Vertical
+        circle_y = np.full(segments + 1, mpl_y)      # Depth constant at back wall
         
         line = self.ax.plot(circle_x, circle_y, circle_z, color=color, linewidth=2.5)[0]
         self._fan_artists.append(line)
         
-        # Draw fan blades (4 spokes) - also in XY plane
+        # Draw fan blades (4 spokes)
         for i in range(4):
             angle = 2.0 * np.pi * i / 4
-            end_x = pos[0] + radius * np.cos(angle)
-            end_y = pos[1] + radius * np.sin(angle)
+            end_x = mpl_x + radius * np.cos(angle)
+            end_z = mpl_z + radius * np.sin(angle)
             line = self.ax.plot(
-                [pos[0], end_x],    # X from center to edge
-                [pos[1], end_y],    # Y from center to edge
-                [pos[2], pos[2]],   # Z constant at back wall
+                [mpl_x, end_x],    # X from center to edge
+                [mpl_y, mpl_y],    # Y constant at back wall
+                [mpl_z, end_z],    # Z from center to edge
                 color=color, linewidth=2.5
             )[0]
             self._fan_artists.append(line)
         
         # Draw center point
-        scatter = self.ax.scatter([pos[0]], [pos[1]], [pos[2]], 
+        scatter = self.ax.scatter([mpl_x], [mpl_y], [mpl_z], 
                                  color=color, s=50, marker='o', edgecolors='white', linewidths=1)
         self._fan_artists.append(scatter)
     
     def _draw_sensors(self):
-        """Draw sensor positions.
+        """Draw sensor positions with Y/Z swapped for matplotlib.
         
-        Sensors are positioned in pairs (low/high) at various locations in the room.
-        Each sensor position is [X, Y, Z]:
-        - X: varies based on fan position and pair ID (spread across width)
-        - Y: low_height (e.g., 5 ft) or high_height (e.g., 15 ft)
-        - Z: varies based on distance from fan (toward front of room)
+        Sensor positions in data: [x, y, z] = [Width, Height, Length]
+        Sensors in pairs (low/high) with different y (height) values
         """
         for pair in self.sensor_pairs:
-            # Draw low sensor (green square) - lower height
-            low_pos = pair.low_sensor.position  # [X, Y_low, Z]
+            # Get low sensor position and convert to matplotlib coords
+            low_pos = pair.low_sensor.position  # [x, y, z]
+            low_mpl_x = low_pos[0]  # Width → X
+            low_mpl_y = low_pos[2]  # Length → Y (depth)
+            low_mpl_z = low_pos[1]  # Height → Z (vertical)
+            
+            # Draw low sensor (green square)
             scatter = self.ax.scatter(
-                [low_pos[0]], [low_pos[1]], [low_pos[2]],
+                [low_mpl_x], [low_mpl_y], [low_mpl_z],
                 color=COLOR_SENSOR_LOW, s=120, marker='s',
                 edgecolors='white', linewidths=1.5, alpha=0.9
             )
             self._sensor_artists.append(scatter)
             
-            # Draw high sensor (red square) - higher height
-            high_pos = pair.high_sensor.position  # [X, Y_high, Z]
+            # Get high sensor position and convert to matplotlib coords
+            high_pos = pair.high_sensor.position  # [x, y, z]
+            high_mpl_x = high_pos[0]  # Width → X
+            high_mpl_y = high_pos[2]  # Length → Y (depth)
+            high_mpl_z = high_pos[1]  # Height → Z (vertical)
+            
+            # Draw high sensor (red square)
             scatter = self.ax.scatter(
-                [high_pos[0]], [high_pos[1]], [high_pos[2]],
+                [high_mpl_x], [high_mpl_y], [high_mpl_z],
                 color=COLOR_SENSOR_HIGH, s=120, marker='s',
                 edgecolors='white', linewidths=1.5, alpha=0.9
             )
             self._sensor_artists.append(scatter)
             
-            # Draw line connecting pair (same X,Z but different Y)
+            # Draw vertical line connecting pair (same X,Y but different Z in matplotlib)
             line = self.ax.plot(
-                [low_pos[0], high_pos[0]],  # X coordinates
-                [low_pos[1], high_pos[1]],  # Y coordinates (vertical line)
-                [low_pos[2], high_pos[2]],  # Z coordinates
+                [low_mpl_x, high_mpl_x],  # X coordinates
+                [low_mpl_y, high_mpl_y],  # Y coordinates (depth)
+                [low_mpl_z, high_mpl_z],  # Z coordinates (vertical line)
                 color='white', linewidth=1.5, alpha=0.4, linestyle='--'
             )[0]
             self._sensor_artists.append(line)
     
     def _draw_particles(self):
-        """Draw smoke particles in 3D space.
+        """Draw smoke particles with Y/Z swapped for matplotlib.
         
-        Particle positions are numpy array with shape (N, 3):
-        - Column 0 (X): Width position (0-30 ft)
-        - Column 1 (Y): Height position (0-20 ft) - VERTICAL
-        - Column 2 (Z): Length position (0-75 ft) - depth
+        Particle positions in data: (N, 3) array of [x, y, z]
+        - x (column 0): Width (0-30 ft)
+        - y (column 1): Height (0-20 ft)
+        - z (column 2): Length (0-75 ft)
         
-        Smoke particles should:
-        - Spread horizontally (X, Z directions)
-        - Rise and stratify vertically (Y direction)
-        - Accumulate in hover zone (Y = 4-8 ft) and upper regions
+        Plot to matplotlib with Y/Z swapped:
+        - matplotlib X ← particles[:, 0] (Width)
+        - matplotlib Y ← particles[:, 2] (Length, depth)
+        - matplotlib Z ← particles[:, 1] (Height, VERTICAL)
         """
         if not self.smoke_sim:
             return
@@ -340,17 +367,16 @@ class Renderer3D(QWidget):
         if len(particles) == 0:
             return
         
-        # Extract coordinates from particle array
-        xs = particles[:, 0]  # Width (X-axis)
-        ys = particles[:, 1]  # Height (Y-axis) - VERTICAL
-        zs = particles[:, 2]  # Length (Z-axis) - depth
+        # Extract and swap Y/Z coordinates for matplotlib
+        mpl_xs = particles[:, 0]  # Width → X
+        mpl_ys = particles[:, 2]  # Length → Y (depth)
+        mpl_zs = particles[:, 1]  # Height → Z (VERTICAL)
         
         # Draw particles as scatter plot
-        # Adjust size and alpha for better visibility
         size = PARTICLE_RENDER_SIZE * 100  # matplotlib uses different scale
         
         self._particle_scatter = self.ax.scatter(
-            xs, ys, zs,
+            mpl_xs, mpl_ys, mpl_zs,
             color=COLOR_SMOKE,
             s=size,
             alpha=PARTICLE_ALPHA,
