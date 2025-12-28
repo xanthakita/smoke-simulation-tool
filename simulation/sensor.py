@@ -110,7 +110,7 @@ class Sensor:
 class SensorPair:
     """Represents a pair of low and high sensors."""
     
-    def __init__(self, pair_id, distance_from_fan, low_height, high_height, fan_position):
+    def __init__(self, pair_id, distance_from_fan, low_height, high_height, fan_position, wall='back'):
         """Initialize sensor pair.
         
         Args:
@@ -119,22 +119,27 @@ class SensorPair:
             low_height: Height of low sensor from floor (feet)
             high_height: Height of high sensor from floor (feet)
             fan_position: Position of the fan (numpy array)
+            wall: Which wall to place sensors on ('front' or 'back')
         """
         self.pair_id = pair_id
         self.distance_from_fan = distance_from_fan
         self.low_height = np.clip(low_height, SENSOR_MIN_HEIGHT, SENSOR_MAX_HEIGHT)
         self.high_height = np.clip(high_height, SENSOR_MIN_HEIGHT, SENSOR_MAX_HEIGHT)
+        self.wall = wall
         
         # Calculate sensor positions
-        # Fan is on back wall, sensors are placed along Z-axis toward front
         fan_x, fan_y, fan_z = fan_position
         
-        # Place sensors at same X position as fan, but closer to front
+        # Place sensors at same X position as fan
         # Add small X offset based on pair_id to prevent visual overlap
         sensor_x = fan_x + (pair_id - 1.5) * 1.5  # Spread sensors across ~4.5 feet
         sensor_x = np.clip(sensor_x, 0, ROOM_WIDTH)
-        sensor_z = fan_z - distance_from_fan
-        sensor_z = np.clip(sensor_z, 0, ROOM_LENGTH)
+        
+        # Calculate Z position based on wall selection
+        if wall.lower() == 'front':
+            sensor_z = 0.5  # 6 inches from front wall
+        else:  # back wall (default)
+            sensor_z = 74.5  # 6 inches from back wall (ROOM_LENGTH=75, so 75-0.5=74.5)
         
         low_pos = np.array([sensor_x, self.low_height, sensor_z])
         high_pos = np.array([sensor_x, self.high_height, sensor_z])

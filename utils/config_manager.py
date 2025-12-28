@@ -103,7 +103,8 @@ class ConfigManager:
                 'pair_id': pair.pair_id,
                 'distance_from_fan': pair.distance_from_fan,
                 'low_height': pair.low_height,
-                'high_height': pair.high_height
+                'high_height': pair.high_height,
+                'wall': pair.wall
             })
         
         config = {
