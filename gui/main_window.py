@@ -238,26 +238,33 @@ class MainWindow(QMainWindow):
         config_group = QGroupBox("Sensor Pair Configuration")
         config_layout = QGridLayout()
         
-        config_layout.addWidget(QLabel("Distance from Fan (ft):"), 0, 0)
+        config_layout.addWidget(QLabel("Sensor Wall:"), 0, 0)
+        self.combo_sensor_wall = QComboBox()
+        self.combo_sensor_wall.addItems(["Back Wall", "Front Wall"])
+        self.combo_sensor_wall.setToolTip("Select which wall to place sensors on (6 inches from wall)")
+        config_layout.addWidget(self.combo_sensor_wall, 0, 1)
+        
+        config_layout.addWidget(QLabel("Distance from Fan (ft):"), 1, 0)
         self.spin_sensor_distance = QDoubleSpinBox()
         self.spin_sensor_distance.setRange(1.0, 70.0)
         self.spin_sensor_distance.setValue(30.0)
         self.spin_sensor_distance.setSingleStep(1.0)
-        config_layout.addWidget(self.spin_sensor_distance, 0, 1)
+        self.spin_sensor_distance.setToolTip("Horizontal distance from fan (used for X-axis positioning)")
+        config_layout.addWidget(self.spin_sensor_distance, 1, 1)
         
-        config_layout.addWidget(QLabel("Low Sensor Height (ft):"), 1, 0)
+        config_layout.addWidget(QLabel("Low Sensor Height (ft):"), 2, 0)
         self.spin_low_height = QDoubleSpinBox()
         self.spin_low_height.setRange(1.0, 19.0)
         self.spin_low_height.setValue(3.0)
         self.spin_low_height.setSingleStep(0.5)
-        config_layout.addWidget(self.spin_low_height, 1, 1)
+        config_layout.addWidget(self.spin_low_height, 2, 1)
         
-        config_layout.addWidget(QLabel("High Sensor Height (ft):"), 2, 0)
+        config_layout.addWidget(QLabel("High Sensor Height (ft):"), 3, 0)
         self.spin_high_height = QDoubleSpinBox()
         self.spin_high_height.setRange(2.0, 19.0)
         self.spin_high_height.setValue(12.0)
         self.spin_high_height.setSingleStep(0.5)
-        config_layout.addWidget(self.spin_high_height, 2, 1)
+        config_layout.addWidget(self.spin_high_height, 3, 1)
         
         config_group.setLayout(config_layout)
         layout.addWidget(config_group)
@@ -463,19 +470,23 @@ class MainWindow(QMainWindow):
         low_height = self.spin_low_height.value()
         high_height = self.spin_high_height.value()
         
+        # Get wall selection
+        wall_text = self.combo_sensor_wall.currentText()
+        wall = 'front' if wall_text == "Front Wall" else 'back'
+        
         # Validate
         if low_height >= high_height:
             QMessageBox.warning(self, "Invalid Heights", "Low sensor must be below high sensor.")
             return
         
-        # Create sensor pair
-        sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION)
+        # Create sensor pair with wall selection
+        sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
         self.sensor_pairs.append(sensor_pair)
         self.fan_controller.add_sensor_pair(sensor_pair)
         
-        # Update list
+        # Update list with wall information
         self.sensor_list.addItem(
-            f"Pair {pair_id}: {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
+            f"Pair {pair_id}: {wall_text}, {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
         )
         
         # Update renderer
@@ -543,7 +554,8 @@ Status: {'Running' if fan_info['is_running'] else 'Off'}"""
         
         for pair in self.sensor_pairs:
             readings = pair.get_readings()
-            sensor_text += f"Sensor Pair {readings['pair_id']}:\n"
+            wall_name = "Front Wall" if pair.wall == 'front' else "Back Wall"
+            sensor_text += f"Sensor Pair {readings['pair_id']} ({wall_name}):\n"
             sensor_text += f"  Low  - PPM: {readings['low']['ppm']:.1f}, Clarity: {readings['low']['clarity_percent']:.1f}%\n"
             sensor_text += f"  High - PPM: {readings['high']['ppm']:.1f}, Clarity: {readings['high']['clarity_percent']:.1f}%\n\n"
         
@@ -660,13 +672,15 @@ Status: {'Running' if fan_info['is_running'] else 'Off'}"""
                     distance = sensor_config['distance_from_fan']
                     low_height = sensor_config['low_height']
                     high_height = sensor_config['high_height']
+                    wall = sensor_config.get('wall', 'back')  # Default to 'back' for backward compatibility
                     
-                    sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION)
+                    sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
                     self.sensor_pairs.append(sensor_pair)
                     self.fan_controller.add_sensor_pair(sensor_pair)
                     
+                    wall_text = "Front Wall" if wall == 'front' else "Back Wall"
                     self.sensor_list.addItem(
-                        f"Pair {pair_id}: {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
+                        f"Pair {pair_id}: {wall_text}, {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
                     )
                 
                 # Load simulation settings
