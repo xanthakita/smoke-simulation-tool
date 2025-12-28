@@ -248,10 +248,14 @@ class Renderer3D(QWidget):
     def _draw_fan(self):
         """Draw exhaust fan with Y/Z swapped for matplotlib.
         
-        Fan position in data: [x, y, z] = [5, 15, 75] (Width, Height, Length)
-        Plot to matplotlib: [X, Y, Z] = [5, 75, 15] (x, z, y swapped)
+        Fan position in data: [x, y, z] = [Width, Height, Length]
+        Plot to matplotlib: [X, Y, Z] = [x, z, y] (swap y and z)
         
-        Fan circle perpendicular to back wall (in XZ plane of matplotlib)
+        Fan orientation depends on which wall it's mounted on:
+        - Left wall (x ≈ 0): Circle in YZ plane (varies in Y and Z, constant X)
+        - Right wall (x ≈ ROOM_WIDTH): Circle in YZ plane (varies in Y and Z, constant X)
+        - Back wall (z ≈ ROOM_LENGTH): Circle in XZ plane (varies in X and Z, constant Y)
+        - Front wall (z ≈ 0): Circle in XZ plane (varies in X and Z, constant Y)
         """
         if not self.fan:
             return
@@ -272,30 +276,58 @@ class Renderer3D(QWidget):
             COLOR_FAN[2] * (0.3 + 0.7 * intensity)
         )
         
-        # Draw fan circle (in XZ plane of matplotlib, Y constant at back)
+        # Determine which wall the fan is on based on position
+        # Check if fan is on left/right wall (x near 0 or ROOM_WIDTH)
+        on_left_wall = pos[0] < 2.0  # Within 2 feet of left wall
+        on_right_wall = pos[0] > ROOM_WIDTH - 2.0  # Within 2 feet of right wall
+        
         segments = 24
         angles = np.linspace(0, 2 * np.pi, segments + 1)
         
-        # Fan circle coordinates (varies in X and Z, constant Y)
-        circle_x = mpl_x + radius * np.cos(angles)  # Horizontal
-        circle_z = mpl_z + radius * np.sin(angles)  # Vertical
-        circle_y = np.full(segments + 1, mpl_y)      # Depth constant at back wall
-        
-        line = self.ax.plot(circle_x, circle_y, circle_z, color=color, linewidth=2.5)[0]
-        self._fan_artists.append(line)
-        
-        # Draw fan blades (4 spokes)
-        for i in range(4):
-            angle = 2.0 * np.pi * i / 4
-            end_x = mpl_x + radius * np.cos(angle)
-            end_z = mpl_z + radius * np.sin(angle)
-            line = self.ax.plot(
-                [mpl_x, end_x],    # X from center to edge
-                [mpl_y, mpl_y],    # Y constant at back wall
-                [mpl_z, end_z],    # Z from center to edge
-                color=color, linewidth=2.5
-            )[0]
+        if on_left_wall or on_right_wall:
+            # Fan on left or right wall - circle in YZ plane (matplotlib Y and Z)
+            # Circle varies in depth (Y) and height (Z), constant width (X)
+            circle_y = mpl_y + radius * np.cos(angles)  # Depth
+            circle_z = mpl_z + radius * np.sin(angles)  # Vertical
+            circle_x = np.full(segments + 1, mpl_x)      # Width constant at wall
+            
+            line = self.ax.plot(circle_x, circle_y, circle_z, color=color, linewidth=2.5)[0]
             self._fan_artists.append(line)
+            
+            # Draw fan blades (4 spokes)
+            for i in range(4):
+                angle = 2.0 * np.pi * i / 4
+                end_y = mpl_y + radius * np.cos(angle)
+                end_z = mpl_z + radius * np.sin(angle)
+                line = self.ax.plot(
+                    [mpl_x, mpl_x],    # X constant at wall
+                    [mpl_y, end_y],    # Y from center to edge
+                    [mpl_z, end_z],    # Z from center to edge
+                    color=color, linewidth=2.5
+                )[0]
+                self._fan_artists.append(line)
+        else:
+            # Fan on front or back wall - circle in XZ plane (matplotlib X and Z)
+            # Circle varies in width (X) and height (Z), constant depth (Y)
+            circle_x = mpl_x + radius * np.cos(angles)  # Horizontal
+            circle_z = mpl_z + radius * np.sin(angles)  # Vertical
+            circle_y = np.full(segments + 1, mpl_y)      # Depth constant at wall
+            
+            line = self.ax.plot(circle_x, circle_y, circle_z, color=color, linewidth=2.5)[0]
+            self._fan_artists.append(line)
+            
+            # Draw fan blades (4 spokes)
+            for i in range(4):
+                angle = 2.0 * np.pi * i / 4
+                end_x = mpl_x + radius * np.cos(angle)
+                end_z = mpl_z + radius * np.sin(angle)
+                line = self.ax.plot(
+                    [mpl_x, end_x],    # X from center to edge
+                    [mpl_y, mpl_y],    # Y constant at wall
+                    [mpl_z, end_z],    # Z from center to edge
+                    color=color, linewidth=2.5
+                )[0]
+                self._fan_artists.append(line)
         
         # Draw center point
         scatter = self.ax.scatter([mpl_x], [mpl_y], [mpl_z], 
