@@ -252,10 +252,10 @@ class Renderer3D(QWidget):
         Plot to matplotlib: [X, Y, Z] = [x, z, y] (swap y and z)
         
         Fan orientation depends on which wall it's mounted on:
-        - Left wall (x ≈ 0): Circle in YZ plane (varies in Y and Z, constant X)
-        - Right wall (x ≈ ROOM_WIDTH): Circle in YZ plane (varies in Y and Z, constant X)
-        - Back wall (z ≈ ROOM_LENGTH): Circle in XZ plane (varies in X and Z, constant Y)
-        - Front wall (z ≈ 0): Circle in XZ plane (varies in X and Z, constant Y)
+        - North wall (x ≈ 0): Circle in YZ plane (varies in Y and Z, constant X)
+        - South wall (x ≈ ROOM_WIDTH): Circle in YZ plane (varies in Y and Z, constant X)
+        - West wall (z ≈ ROOM_LENGTH): Circle in XY plane (varies in X and Y, constant Z)
+        - East wall (z ≈ 0): Circle in XY plane (varies in X and Y, constant Z)
         """
         if not self.fan:
             return
@@ -277,15 +277,15 @@ class Renderer3D(QWidget):
         )
         
         # Determine which wall the fan is on based on position
-        # Check if fan is on left/right wall (x near 0 or ROOM_WIDTH)
-        on_left_wall = pos[0] < 2.0  # Within 2 feet of left wall
-        on_right_wall = pos[0] > ROOM_WIDTH - 2.0  # Within 2 feet of right wall
+        # Check if fan is on North/South wall (x near 0 or ROOM_WIDTH)
+        on_north_wall = pos[0] < 2.0  # Within 2 feet of North wall (x≈0)
+        on_south_wall = pos[0] > ROOM_WIDTH - 2.0  # Within 2 feet of South wall (x≈30)
         
         segments = 24
         angles = np.linspace(0, 2 * np.pi, segments + 1)
         
-        if on_left_wall or on_right_wall:
-            # Fan on left or right wall - circle in YZ plane (matplotlib Y and Z)
+        if on_north_wall or on_south_wall:
+            # Fan on North or South wall - circle in YZ plane (matplotlib Y and Z)
             # Circle varies in depth (Y) and height (Z), constant width (X)
             circle_y = mpl_y + radius * np.cos(angles)  # Depth
             circle_z = mpl_z + radius * np.sin(angles)  # Vertical
@@ -307,7 +307,7 @@ class Renderer3D(QWidget):
                 )[0]
                 self._fan_artists.append(line)
         else:
-            # Fan on front or back wall - circle in XZ plane (matplotlib X and Z)
+            # Fan on East or West wall - circle in XZ plane (matplotlib X and Z)
             # Circle varies in width (X) and height (Z), constant depth (Y)
             circle_x = mpl_x + radius * np.cos(angles)  # Horizontal
             circle_z = mpl_z + radius * np.sin(angles)  # Vertical

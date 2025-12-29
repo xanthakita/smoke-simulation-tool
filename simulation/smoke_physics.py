@@ -308,7 +308,7 @@ class SmokeSimulation:
     
     def _apply_boundary_conditions(self):
         """Apply boundary conditions to keep particles in room."""
-        # X boundaries (left/right walls)
+        # X boundaries (North/South walls)
         mask = self.particles_positions[:, 0] < 0
         self.particles_positions[mask, 0] = 0
         self.particles_velocities[mask, 0] *= -0.5
@@ -326,12 +326,12 @@ class SmokeSimulation:
         self.particles_positions[mask, 1] = ROOM_HEIGHT
         self.particles_velocities[mask, 1] *= -0.5
         
-        # Z boundaries (front/back walls)
+        # Z boundaries (East/West walls)
         mask = self.particles_positions[:, 2] < 0
         self.particles_positions[mask, 2] = 0
         self.particles_velocities[mask, 2] *= -0.5
         
-        # Back wall with fan - particles near fan are removed
+        # Check West wall boundary
         mask = self.particles_positions[:, 2] > ROOM_LENGTH - 0.5
         near_fan = mask.copy()
         
