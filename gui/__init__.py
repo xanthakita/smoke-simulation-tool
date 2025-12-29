@@ -1,1 +1,1 @@
-"""GUI modules for the application."""
+"""GUI package for smoke simulation tool."""

@@ -91,7 +91,7 @@ class ConfigManager:
         Args:
             sensor_pairs: List of SensorPair objects
             num_smokers: Number of active smokers
-            fan_mode: 'manual' or 'auto'
+            fan_mode: 'manual', 'auto', or 'trip'
             simulation_speed: Simulation speed multiplier
             
         Returns:
@@ -104,7 +104,11 @@ class ConfigManager:
                 'distance_from_fan': pair.distance_from_fan,
                 'low_height': pair.low_height,
                 'high_height': pair.high_height,
-                'wall': pair.wall
+                'wall': pair.wall,
+                # Trip control settings
+                'trip_ppm': pair.trip_ppm,
+                'trip_aqi': pair.trip_aqi,
+                'trip_duration': pair.trip_duration
             })
         
         config = {

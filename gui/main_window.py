@@ -1,731 +1,764 @@
-"""Main GUI window for smoke simulation application."""
+"""Main window for smoke simulation GUI."""
 
 import sys
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QSlider, QComboBox,
-    QGroupBox, QTextEdit, QTabWidget, QFileDialog, QMessageBox,
-    QListWidget, QSplitter
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
+    QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QSlider, QComboBox,
+    QListWidget, QListWidgetItem, QGroupBox, QRadioButton, QButtonGroup,
+    QGridLayout, QSizePolicy, QFrame
 )
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QFont
-import pyqtgraph as pg
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QPalette, QColor
 import numpy as np
 
 from simulation.room import Room
 from simulation.fan import ExhaustFan
 from simulation.sensor import SensorPair
 from simulation.smoke_physics import SmokeSimulation
-from controllers.fan_controller import FanController
-from data.data_logger import DataLogger
-from visualization.renderer_3d import Renderer3D
-from utils.config_manager import ConfigManager
+from controllers.fan_controller import FanController, TripController
 from utils.constants import (
-    MAX_SMOKERS, DEFAULT_NUM_SMOKERS, FAN_POSITION,
-    DEFAULT_SIMULATION_SPEED, MAX_SIMULATION_SPEED, MIN_SIMULATION_SPEED
+    FAN_POSITION, ROOM_WIDTH, ROOM_LENGTH, ROOM_HEIGHT,
+    DEFAULT_NUM_SMOKERS, DEFAULT_TRIP_PPM, DEFAULT_TRIP_AQI,
+    DEFAULT_TRIP_DURATION
 )
+from utils.config_manager import ConfigManager
+from visualization.renderer_3d import Renderer3D
 
 
 class MainWindow(QMainWindow):
     """Main application window."""
     
     def __init__(self):
-        """Initialize main window."""
         super().__init__()
-        
         self.setWindowTitle("Cigar Lounge Smoke Simulation Tool")
-        self.setGeometry(100, 100, 1600, 900)
+        self.setGeometry(100, 100, 1400, 900)
         
         # Initialize simulation components
         self.room = Room()
         self.fan = ExhaustFan()
         self.smoke_sim = SmokeSimulation(self.room, self.fan)
+        
+        # Initialize controllers
         self.fan_controller = FanController(self.fan)
-        self.data_logger = DataLogger()
-        self.config_manager = ConfigManager()
+        self.trip_controller = TripController(self.fan)
         
         # Sensor pairs
         self.sensor_pairs = []
+        self.next_pair_id = 0
+        
+        # Config manager
+        self.config_manager = ConfigManager()
         
         # Simulation state
-        self.is_running = False
+        self.simulation_running = False
         self.simulation_time = 0.0
-        self.simulation_speed = DEFAULT_SIMULATION_SPEED
+        self.dt = 0.1  # Time step in seconds
         
-        # Setup UI
-        self._setup_ui()
+        # Create UI
+        self.init_ui()
         
-        # Setup timer for simulation updates
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._update_simulation)
-        self.timer.setInterval(33)  # ~30 FPS
+        # Setup simulation timer
+        self.sim_timer = QTimer()
+        self.sim_timer.timeout.connect(self.update_simulation)
+        self.sim_timer.setInterval(int(self.dt * 1000))  # Convert to milliseconds
         
-        # Setup timer for display updates (slower)
+        # Setup display update timer (more frequent for smooth UI)
         self.display_timer = QTimer()
-        self.display_timer.timeout.connect(self._update_displays)
-        self.display_timer.start(100)  # 10 Hz
+        self.display_timer.timeout.connect(self.update_display)
+        self.display_timer.start(100)  # Update display 10 times per second
         
-    def _setup_ui(self):
-        """Setup the user interface."""
-        # Central widget with splitter
+    def init_ui(self):
+        """Initialize user interface."""
+        # Create central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout
+        main_layout = QVBoxLayout(central_widget)
         
-        # Create main splitter
-        splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(splitter)
+        # Create tab widget
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
         
-        # Left panel - 3D view and controls
-        left_panel = self._create_left_panel()
-        splitter.addWidget(left_panel)
+        # Create tabs
+        self.create_simulation_tab()
+        self.create_sensors_tab()
+        self.create_fan_control_tab()
         
-        # Right panel - data and graphs
-        right_panel = self._create_right_panel()
-        splitter.addWidget(right_panel)
+        # Status bar
+        self.statusBar().showMessage("Ready")
         
-        # Set splitter proportions
-        splitter.setSizes([800, 800])
-    
-    def _create_left_panel(self):
-        """Create left panel with 3D view and controls.
+    def create_simulation_tab(self):
+        """Create simulation control tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
-        Returns:
-            QWidget containing left panel
-        """
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        # 3D Visualization
+        viz_group = QGroupBox("3D Smoke Simulation View")
+        viz_layout = QVBoxLayout(viz_group)
         
-        # 3D View
-        self.renderer_3d = Renderer3D()
-        self.renderer_3d.set_simulation_refs(self.smoke_sim, self.fan, self.sensor_pairs)
-        self.renderer_3d.setMinimumHeight(400)
-        layout.addWidget(self.renderer_3d, stretch=2)
+        # Room info label
+        room_info = QLabel(f"Room: {int(ROOM_WIDTH)}ft (W) × {int(ROOM_HEIGHT)}ft (H) × {int(ROOM_LENGTH)}ft (L)")
+        room_info.setAlignment(Qt.AlignCenter)
+        room_info.setStyleSheet("font-size: 14pt; font-weight: bold; color: white;")
+        viz_layout.addWidget(room_info)
         
-        # Control tabs
-        control_tabs = QTabWidget()
-        control_tabs.addTab(self._create_simulation_controls(), "Simulation")
-        control_tabs.addTab(self._create_sensor_controls(), "Sensors")
-        control_tabs.addTab(self._create_fan_controls(), "Fan Control")
-        layout.addWidget(control_tabs, stretch=1)
+        # 3D Renderer
+        self.renderer = Renderer3D()
+        self.renderer.set_simulation_refs(self.smoke_sim, self.fan, self.sensor_pairs)
+        viz_layout.addWidget(self.renderer)
         
-        return panel
-    
-    def _create_right_panel(self):
-        """Create right panel with data display and graphs.
+        layout.addWidget(viz_group)
         
-        Returns:
-            QWidget containing right panel
-        """
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        
-        # Data tabs
-        data_tabs = QTabWidget()
-        data_tabs.addTab(self._create_sensor_data_panel(), "Sensor Readings")
-        data_tabs.addTab(self._create_graphs_panel(), "Graphs")
-        data_tabs.addTab(self._create_statistics_panel(), "Statistics")
-        layout.addWidget(data_tabs)
-        
-        return panel
-    
-    def _create_simulation_controls(self):
-        """Create simulation control panel.
-        
-        Returns:
-            QWidget with simulation controls
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Play/Pause/Reset buttons
-        button_layout = QHBoxLayout()
-        
-        self.btn_start = QPushButton("Start")
-        self.btn_start.clicked.connect(self._start_simulation)
-        button_layout.addWidget(self.btn_start)
-        
-        self.btn_pause = QPushButton("Pause")
-        self.btn_pause.clicked.connect(self._pause_simulation)
-        self.btn_pause.setEnabled(False)
-        button_layout.addWidget(self.btn_pause)
-        
-        self.btn_reset = QPushButton("Reset")
-        self.btn_reset.clicked.connect(self._reset_simulation)
-        button_layout.addWidget(self.btn_reset)
-        
-        layout.addLayout(button_layout)
+        # Simulation controls
+        controls_group = QGroupBox("Simulation Controls")
+        controls_layout = QGridLayout(controls_group)
         
         # Number of smokers
-        smoker_group = QGroupBox("Smoke Sources")
-        smoker_layout = QGridLayout()
-        
-        smoker_layout.addWidget(QLabel("Number of Smokers:"), 0, 0)
-        self.spin_smokers = QSpinBox()
-        self.spin_smokers.setRange(0, MAX_SMOKERS)
-        self.spin_smokers.setValue(DEFAULT_NUM_SMOKERS)
-        self.spin_smokers.valueChanged.connect(self._update_num_smokers)
-        smoker_layout.addWidget(self.spin_smokers, 0, 1)
-        
-        smoker_group.setLayout(smoker_layout)
-        layout.addWidget(smoker_group)
+        controls_layout.addWidget(QLabel("Number of Smokers:"), 0, 0)
+        self.num_smokers_spin = QSpinBox()
+        self.num_smokers_spin.setRange(0, 48)
+        self.num_smokers_spin.setValue(DEFAULT_NUM_SMOKERS)
+        self.num_smokers_spin.valueChanged.connect(self.on_num_smokers_changed)
+        controls_layout.addWidget(self.num_smokers_spin, 0, 1)
         
         # Simulation speed
-        speed_group = QGroupBox("Simulation Speed")
-        speed_layout = QGridLayout()
+        controls_layout.addWidget(QLabel("Simulation Speed:"), 1, 0)
+        self.sim_speed_combo = QComboBox()
+        self.sim_speed_combo.addItems(["0.5x", "1x", "2x", "5x", "10x"])
+        self.sim_speed_combo.setCurrentText("1x")
+        self.sim_speed_combo.currentTextChanged.connect(self.on_sim_speed_changed)
+        controls_layout.addWidget(self.sim_speed_combo, 1, 1)
         
-        speed_layout.addWidget(QLabel("Speed Multiplier:"), 0, 0)
-        self.spin_speed = QDoubleSpinBox()
-        self.spin_speed.setRange(MIN_SIMULATION_SPEED, MAX_SIMULATION_SPEED)
-        self.spin_speed.setValue(DEFAULT_SIMULATION_SPEED)
-        self.spin_speed.setSingleStep(0.5)
-        self.spin_speed.valueChanged.connect(self._update_simulation_speed)
-        speed_layout.addWidget(self.spin_speed, 0, 1)
+        # Start/Stop button
+        self.start_stop_btn = QPushButton("Start Simulation")
+        self.start_stop_btn.clicked.connect(self.toggle_simulation)
+        self.start_stop_btn.setStyleSheet("font-size: 12pt; padding: 10px;")
+        controls_layout.addWidget(self.start_stop_btn, 2, 0, 1, 2)
         
-        speed_group.setLayout(speed_layout)
-        layout.addWidget(speed_group)
+        # Reset button
+        reset_btn = QPushButton("Reset Simulation")
+        reset_btn.clicked.connect(self.reset_simulation)
+        reset_btn.setStyleSheet("font-size: 12pt; padding: 10px;")
+        controls_layout.addWidget(reset_btn, 3, 0, 1, 2)
         
-        # Configuration
-        config_group = QGroupBox("Configuration")
-        config_layout = QVBoxLayout()
+        layout.addWidget(controls_group)
         
-        btn_save_config = QPushButton("Save Configuration")
-        btn_save_config.clicked.connect(self._save_configuration)
-        config_layout.addWidget(btn_save_config)
+        # Simulation stats
+        stats_group = QGroupBox("Simulation Statistics")
+        stats_layout = QGridLayout(stats_group)
         
-        btn_load_config = QPushButton("Load Configuration")
-        btn_load_config.clicked.connect(self._load_configuration)
-        config_layout.addWidget(btn_load_config)
+        self.time_label = QLabel("Time: 0.0 s")
+        self.particles_label = QLabel("Particles: 0")
+        self.fan_status_label = QLabel("Fan Speed: 0%")
         
-        config_group.setLayout(config_layout)
-        layout.addWidget(config_group)
+        stats_layout.addWidget(self.time_label, 0, 0)
+        stats_layout.addWidget(self.particles_label, 0, 1)
+        stats_layout.addWidget(self.fan_status_label, 0, 2)
         
-        layout.addStretch()
+        layout.addWidget(stats_group)
         
-        return widget
-    
-    def _create_sensor_controls(self):
-        """Create sensor configuration panel.
+        self.tabs.addTab(tab, "Simulation")
         
-        Returns:
-            QWidget with sensor controls
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+    def create_sensors_tab(self):
+        """Create sensors configuration tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
-        # Sensor list
-        list_layout = QHBoxLayout()
+        # Sensor pairs list
+        list_group = QGroupBox("Sensor Pairs")
+        list_layout = QVBoxLayout(list_group)
+        
         self.sensor_list = QListWidget()
+        self.sensor_list.currentItemChanged.connect(self.on_sensor_selection_changed)
         list_layout.addWidget(self.sensor_list)
         
         # Buttons
-        btn_layout = QVBoxLayout()
-        btn_add = QPushButton("Add Sensor Pair")
-        btn_add.clicked.connect(self._add_sensor_pair)
-        btn_layout.addWidget(btn_add)
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("Add Sensor Pair")
+        add_btn.clicked.connect(self.add_sensor_pair)
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.clicked.connect(self.remove_sensor_pair)
         
-        btn_remove = QPushButton("Remove Selected")
-        btn_remove.clicked.connect(self._remove_sensor_pair)
-        btn_layout.addWidget(btn_remove)
-        
-        btn_layout.addStretch()
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(remove_btn)
         list_layout.addLayout(btn_layout)
         
-        layout.addLayout(list_layout)
+        layout.addWidget(list_group)
         
         # Sensor configuration
         config_group = QGroupBox("Sensor Pair Configuration")
-        config_layout = QGridLayout()
+        config_layout = QGridLayout(config_group)
         
-        config_layout.addWidget(QLabel("Sensor Wall:"), 0, 0)
-        self.combo_sensor_wall = QComboBox()
-        self.combo_sensor_wall.addItems(["North Wall", "South Wall"])
-        self.combo_sensor_wall.setToolTip("Select which wall to place sensors on (6 inches from wall)")
-        config_layout.addWidget(self.combo_sensor_wall, 0, 1)
+        row = 0
         
-        config_layout.addWidget(QLabel("Distance from Fan (ft):"), 1, 0)
-        self.spin_sensor_distance = QDoubleSpinBox()
-        self.spin_sensor_distance.setRange(1.0, 70.0)
-        self.spin_sensor_distance.setValue(30.0)
-        self.spin_sensor_distance.setSingleStep(1.0)
-        self.spin_sensor_distance.setToolTip("Horizontal distance from fan (used for X-axis positioning)")
-        config_layout.addWidget(self.spin_sensor_distance, 1, 1)
+        # Sensor Wall
+        config_layout.addWidget(QLabel("Sensor Wall:"), row, 0)
+        self.wall_combo = QComboBox()
+        self.wall_combo.addItems(["North Wall", "South Wall"])
+        self.wall_combo.currentTextChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.wall_combo, row, 1)
+        row += 1
         
-        config_layout.addWidget(QLabel("Low Sensor Height (ft):"), 2, 0)
-        self.spin_low_height = QDoubleSpinBox()
-        self.spin_low_height.setRange(1.0, 19.0)
-        self.spin_low_height.setValue(3.0)
-        self.spin_low_height.setSingleStep(0.5)
-        config_layout.addWidget(self.spin_low_height, 2, 1)
+        # Distance from Fan
+        config_layout.addWidget(QLabel("Distance from Fan (ft):"), row, 0)
+        self.distance_spin = QDoubleSpinBox()
+        self.distance_spin.setRange(0.0, ROOM_LENGTH)
+        self.distance_spin.setValue(30.0)
+        self.distance_spin.setSingleStep(1.0)
+        self.distance_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.distance_spin, row, 1)
+        row += 1
         
-        config_layout.addWidget(QLabel("High Sensor Height (ft):"), 3, 0)
-        self.spin_high_height = QDoubleSpinBox()
-        self.spin_high_height.setRange(2.0, 19.0)
-        self.spin_high_height.setValue(12.0)
-        self.spin_high_height.setSingleStep(0.5)
-        config_layout.addWidget(self.spin_high_height, 3, 1)
+        # Low Sensor Height
+        config_layout.addWidget(QLabel("Low Sensor Height (ft):"), row, 0)
+        self.low_height_spin = QDoubleSpinBox()
+        self.low_height_spin.setRange(1.0, ROOM_HEIGHT - 1.0)
+        self.low_height_spin.setValue(3.0)
+        self.low_height_spin.setSingleStep(0.5)
+        self.low_height_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.low_height_spin, row, 1)
+        row += 1
         
-        config_group.setLayout(config_layout)
+        # High Sensor Height
+        config_layout.addWidget(QLabel("High Sensor Height (ft):"), row, 0)
+        self.high_height_spin = QDoubleSpinBox()
+        self.high_height_spin.setRange(1.0, ROOM_HEIGHT - 1.0)
+        self.high_height_spin.setValue(12.0)
+        self.high_height_spin.setSingleStep(0.5)
+        self.high_height_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.high_height_spin, row, 1)
+        row += 1
+        
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        config_layout.addWidget(separator, row, 0, 1, 2)
+        row += 1
+        
+        # Trip control header
+        trip_header = QLabel("Trip Control Settings")
+        trip_header.setStyleSheet("font-weight: bold; font-size: 11pt;")
+        config_layout.addWidget(trip_header, row, 0, 1, 2)
+        row += 1
+        
+        # Trip PPM
+        config_layout.addWidget(QLabel("Trip PPM:"), row, 0)
+        self.trip_ppm_spin = QSpinBox()
+        self.trip_ppm_spin.setRange(0, 1000)
+        self.trip_ppm_spin.setValue(DEFAULT_TRIP_PPM)
+        self.trip_ppm_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.trip_ppm_spin, row, 1)
+        row += 1
+        
+        # Trip AQI
+        config_layout.addWidget(QLabel("Trip AQI:"), row, 0)
+        self.trip_aqi_spin = QSpinBox()
+        self.trip_aqi_spin.setRange(0, 500)
+        self.trip_aqi_spin.setValue(DEFAULT_TRIP_AQI)
+        self.trip_aqi_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.trip_aqi_spin, row, 1)
+        row += 1
+        
+        # Trip Duration
+        config_layout.addWidget(QLabel("Trip Duration (sec):"), row, 0)
+        self.trip_duration_spin = QSpinBox()
+        self.trip_duration_spin.setRange(0, 3600)
+        self.trip_duration_spin.setValue(DEFAULT_TRIP_DURATION)
+        self.trip_duration_spin.valueChanged.connect(self.on_sensor_config_changed)
+        config_layout.addWidget(self.trip_duration_spin, row, 1)
+        row += 1
+        
+        # Separator
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setFrameShadow(QFrame.Sunken)
+        config_layout.addWidget(separator2, row, 0, 1, 2)
+        row += 1
+        
+        # Trip Status Display
+        status_header = QLabel("Trip Status")
+        status_header.setStyleSheet("font-weight: bold; font-size: 11pt;")
+        config_layout.addWidget(status_header, row, 0, 1, 2)
+        row += 1
+        
+        self.trip_status_label = QLabel("NORMAL")
+        self.trip_status_label.setAlignment(Qt.AlignCenter)
+        self.trip_status_label.setStyleSheet(
+            "background-color: #2ecc71; color: white; "
+            "font-weight: bold; font-size: 12pt; padding: 10px; border-radius: 5px;"
+        )
+        config_layout.addWidget(self.trip_status_label, row, 0, 1, 2)
+        row += 1
+        
+        self.trip_duration_label = QLabel("Remaining: 0 s")
+        self.trip_duration_label.setAlignment(Qt.AlignCenter)
+        config_layout.addWidget(self.trip_duration_label, row, 0, 1, 2)
+        row += 1
+        
+        # Sensor readings display
+        readings_header = QLabel("Current Readings")
+        readings_header.setStyleSheet("font-weight: bold; font-size: 11pt;")
+        config_layout.addWidget(readings_header, row, 0, 1, 2)
+        row += 1
+        
+        self.low_sensor_reading_label = QLabel("Low: PPM: 0.0 | AQI: 0 | Clarity: 100%")
+        config_layout.addWidget(self.low_sensor_reading_label, row, 0, 1, 2)
+        row += 1
+        
+        self.high_sensor_reading_label = QLabel("High: PPM: 0.0 | AQI: 0 | Clarity: 100%")
+        config_layout.addWidget(self.high_sensor_reading_label, row, 0, 1, 2)
+        row += 1
+        
         layout.addWidget(config_group)
         
-        layout.addStretch()
+        self.tabs.addTab(tab, "Sensors")
         
-        return widget
-    
-    def _create_fan_controls(self):
-        """Create fan control panel.
+    def create_fan_control_tab(self):
+        """Create fan control tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
         
-        Returns:
-            QWidget with fan controls
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        # Fan mode selection
+        mode_group = QGroupBox("Fan Control Mode")
+        mode_layout = QVBoxLayout(mode_group)
         
-        # Fan mode
-        mode_group = QGroupBox("Fan Mode")
-        mode_layout = QVBoxLayout()
+        self.fan_mode_group = QButtonGroup()
         
-        self.combo_fan_mode = QComboBox()
-        self.combo_fan_mode.addItems(["Manual", "Automatic"])
-        self.combo_fan_mode.currentTextChanged.connect(self._change_fan_mode)
-        mode_layout.addWidget(self.combo_fan_mode)
+        self.manual_radio = QRadioButton("Manual")
+        self.manual_radio.setChecked(True)
+        self.manual_radio.toggled.connect(self.on_fan_mode_changed)
+        self.fan_mode_group.addButton(self.manual_radio)
+        mode_layout.addWidget(self.manual_radio)
         
-        mode_group.setLayout(mode_layout)
+        self.auto_radio = QRadioButton("Auto (PID Controller)")
+        self.auto_radio.toggled.connect(self.on_fan_mode_changed)
+        self.fan_mode_group.addButton(self.auto_radio)
+        mode_layout.addWidget(self.auto_radio)
+        
+        self.trip_radio = QRadioButton("Trip (Sensor-Based)")
+        self.trip_radio.toggled.connect(self.on_fan_mode_changed)
+        self.fan_mode_group.addButton(self.trip_radio)
+        mode_layout.addWidget(self.trip_radio)
+        
         layout.addWidget(mode_group)
         
-        # Manual speed control
-        self.manual_speed_group = QGroupBox("Manual Speed Control")
-        manual_layout = QVBoxLayout()
+        # Manual control
+        manual_group = QGroupBox("Manual Speed Control")
+        manual_layout = QVBoxLayout(manual_group)
         
-        self.slider_fan_speed = QSlider(Qt.Horizontal)
-        self.slider_fan_speed.setRange(0, 100)
-        self.slider_fan_speed.setValue(0)
-        self.slider_fan_speed.valueChanged.connect(self._manual_fan_speed_changed)
-        manual_layout.addWidget(self.slider_fan_speed)
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("Fan Speed:"))
         
-        self.label_fan_speed = QLabel("Fan Speed: 0%")
-        manual_layout.addWidget(self.label_fan_speed)
+        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setRange(0, 100)
+        self.speed_slider.setValue(0)
+        self.speed_slider.setTickPosition(QSlider.TicksBelow)
+        self.speed_slider.setTickInterval(10)
+        self.speed_slider.valueChanged.connect(self.on_speed_slider_changed)
+        speed_layout.addWidget(self.speed_slider)
         
-        self.manual_speed_group.setLayout(manual_layout)
-        layout.addWidget(self.manual_speed_group)
+        self.speed_value_label = QLabel("0%")
+        self.speed_value_label.setMinimumWidth(50)
+        speed_layout.addWidget(self.speed_value_label)
         
-        # Fan info
-        info_group = QGroupBox("Fan Information")
-        info_layout = QVBoxLayout()
+        manual_layout.addLayout(speed_layout)
         
-        self.label_fan_info = QLabel()
-        self.label_fan_info.setFont(QFont("Courier", 9))
-        self.label_fan_info.setWordWrap(True)
-        info_layout.addWidget(self.label_fan_info)
+        self.manual_group_widget = manual_group
+        layout.addWidget(manual_group)
         
-        info_group.setLayout(info_layout)
-        layout.addWidget(info_group)
+        # Fan status
+        status_group = QGroupBox("Fan Status")
+        status_layout = QGridLayout(status_group)
+        
+        self.fan_mode_label = QLabel("Mode: Manual")
+        self.fan_speed_label = QLabel("Speed: 0%")
+        self.fan_cfm_label = QLabel("CFM: 0")
+        self.fan_runtime_label = QLabel("Runtime: 0.0 s")
+        
+        status_layout.addWidget(self.fan_mode_label, 0, 0)
+        status_layout.addWidget(self.fan_speed_label, 0, 1)
+        status_layout.addWidget(self.fan_cfm_label, 1, 0)
+        status_layout.addWidget(self.fan_runtime_label, 1, 1)
+        
+        layout.addWidget(status_group)
+        
+        # Trip controller status (only visible in Trip mode)
+        trip_status_group = QGroupBox("Trip Controller Status")
+        trip_status_layout = QVBoxLayout(trip_status_group)
+        
+        self.trip_controller_status_label = QLabel("No sensors tripped")
+        trip_status_layout.addWidget(self.trip_controller_status_label)
+        
+        self.trip_sensors_list = QListWidget()
+        self.trip_sensors_list.setMaximumHeight(150)
+        trip_status_layout.addWidget(self.trip_sensors_list)
+        
+        self.trip_status_group_widget = trip_status_group
+        self.trip_status_group_widget.setVisible(False)
+        layout.addWidget(trip_status_group)
         
         layout.addStretch()
         
-        return widget
-    
-    def _create_sensor_data_panel(self):
-        """Create sensor data display panel.
+        self.tabs.addTab(tab, "Fan Control")
         
-        Returns:
-            QWidget with sensor data
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+    def add_sensor_pair(self):
+        """Add a new sensor pair."""
+        wall = "south" if self.wall_combo.currentText() == "South Wall" else "north"
         
-        self.text_sensor_data = QTextEdit()
-        self.text_sensor_data.setReadOnly(True)
-        self.text_sensor_data.setFont(QFont("Courier", 9))
-        layout.addWidget(self.text_sensor_data)
+        pair = SensorPair(
+            pair_id=self.next_pair_id,
+            distance_from_fan=self.distance_spin.value(),
+            low_height=self.low_height_spin.value(),
+            high_height=self.high_height_spin.value(),
+            fan_position=FAN_POSITION,
+            wall=wall,
+            trip_ppm=self.trip_ppm_spin.value(),
+            trip_aqi=self.trip_aqi_spin.value(),
+            trip_duration=self.trip_duration_spin.value()
+        )
         
-        return widget
-    
-    def _create_graphs_panel(self):
-        """Create graphs panel.
+        self.sensor_pairs.append(pair)
+        self.next_pair_id += 1
         
-        Returns:
-            QWidget with graphs
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        # Add to controllers
+        self.fan_controller.add_sensor_pair(pair)
+        self.trip_controller.add_sensor_pair(pair)
         
-        # PPM graph
-        self.graph_ppm = pg.PlotWidget(title="Particle Concentration (PPM)")
-        self.graph_ppm.setLabel('left', 'PPM')
-        self.graph_ppm.setLabel('bottom', 'Time', units='s')
-        self.graph_ppm.addLegend()
-        layout.addWidget(self.graph_ppm)
+        # Update list
+        self.update_sensor_list()
         
-        # Clarity graph
-        self.graph_clarity = pg.PlotWidget(title="Air Clarity (%)")
-        self.graph_clarity.setLabel('left', 'Clarity', units='%')
-        self.graph_clarity.setLabel('bottom', 'Time', units='s')
-        self.graph_clarity.addLegend()
-        layout.addWidget(self.graph_clarity)
+        # Update renderer
+        self.renderer.set_simulation_refs(self.smoke_sim, self.fan, self.sensor_pairs)
         
-        # Fan speed graph
-        self.graph_fan = pg.PlotWidget(title="Fan Speed (%)")
-        self.graph_fan.setLabel('left', 'Speed', units='%')
-        self.graph_fan.setLabel('bottom', 'Time', units='s')
-        layout.addWidget(self.graph_fan)
+        self.statusBar().showMessage(f"Added sensor pair {pair.pair_id}")
         
-        return widget
-    
-    def _create_statistics_panel(self):
-        """Create statistics panel.
+    def remove_sensor_pair(self):
+        """Remove selected sensor pair."""
+        current_item = self.sensor_list.currentItem()
+        if current_item is None:
+            return
         
-        Returns:
-            QWidget with statistics
-        """
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
+        pair_id = current_item.data(Qt.UserRole)
         
-        self.text_statistics = QTextEdit()
-        self.text_statistics.setReadOnly(True)
-        self.text_statistics.setFont(QFont("Courier", 10))
-        layout.addWidget(self.text_statistics)
+        # Remove from lists
+        self.sensor_pairs = [sp for sp in self.sensor_pairs if sp.pair_id != pair_id]
         
-        # Export button
-        btn_export = QPushButton("Export Data to CSV")
-        btn_export.clicked.connect(self._export_data)
-        layout.addWidget(btn_export)
+        # Remove from controllers
+        self.fan_controller.remove_sensor_pair(pair_id)
+        self.trip_controller.remove_sensor_pair(pair_id)
         
-        return widget
-    
-    def _start_simulation(self):
-        """Start the simulation."""
-        self.is_running = True
-        self.btn_start.setEnabled(False)
-        self.btn_pause.setEnabled(True)
-        self.timer.start()
+        # Update list
+        self.update_sensor_list()
         
-        # Print debug information
-        print("\n" + "=" * 60)
-        print("SIMULATION STARTED - CONFIGURATION")
-        print("=" * 60)
-        print(f"Fan Position: X={FAN_POSITION[0]} ft, Y={FAN_POSITION[1]} ft, Z={FAN_POSITION[2]} ft")
-        print(f"  (East wall, {FAN_POSITION[1]} ft high, {FAN_POSITION[0]} ft from North wall)")
-        print(f"\nSensor Pairs: {len(self.sensor_pairs)}")
+        # Update renderer
+        self.renderer.set_simulation_refs(self.smoke_sim, self.fan, self.sensor_pairs)
+        
+        self.statusBar().showMessage(f"Removed sensor pair {pair_id}")
+        
+    def update_sensor_list(self):
+        """Update sensor pairs list widget."""
+        self.sensor_list.clear()
+        
         for pair in self.sensor_pairs:
-            wall_name = "North Wall" if pair.wall == 'north' else "South Wall"
-            print(f"  Pair {pair.pair_id} ({wall_name}):")
-            print(f"    Low:  X={pair.low_sensor.position[0]:.1f}, Y={pair.low_sensor.position[1]:.1f}, Z={pair.low_sensor.position[2]:.1f}")
-            print(f"    High: X={pair.high_sensor.position[0]:.1f}, Y={pair.high_sensor.position[1]:.1f}, Z={pair.high_sensor.position[2]:.1f}")
-        print("=" * 60 + "\n")
+            wall_name = "North Wall" if pair.wall == "north" else "South Wall"
+            item_text = (f"Pair {pair.pair_id}: {wall_name}, "
+                        f"{pair.distance_from_fan:.1f}ft from fan, "
+                        f"Low:{pair.low_height:.1f}ft, High:{pair.high_height:.1f}ft")
+            
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.UserRole, pair.pair_id)
+            self.sensor_list.addItem(item)
         
-        # Initialize smokers if not already done
-        if self.smoke_sim.num_smokers == 0:
-            self._update_num_smokers()
-    
-    def _pause_simulation(self):
-        """Pause the simulation."""
-        self.is_running = False
-        self.btn_start.setEnabled(True)
-        self.btn_pause.setEnabled(False)
-        self.timer.stop()
-    
-    def _reset_simulation(self):
-        """Reset the simulation."""
-        self._pause_simulation()
+    def on_sensor_selection_changed(self, current, previous):
+        """Handle sensor selection change."""
+        if current is None:
+            return
         
+        pair_id = current.data(Qt.UserRole)
+        
+        # Find the sensor pair
+        pair = None
+        for sp in self.sensor_pairs:
+            if sp.pair_id == pair_id:
+                pair = sp
+                break
+        
+        if pair is None:
+            return
+        
+        # Update configuration fields
+        self.wall_combo.blockSignals(True)
+        self.distance_spin.blockSignals(True)
+        self.low_height_spin.blockSignals(True)
+        self.high_height_spin.blockSignals(True)
+        self.trip_ppm_spin.blockSignals(True)
+        self.trip_aqi_spin.blockSignals(True)
+        self.trip_duration_spin.blockSignals(True)
+        
+        self.wall_combo.setCurrentText("North Wall" if pair.wall == "north" else "South Wall")
+        self.distance_spin.setValue(pair.distance_from_fan)
+        self.low_height_spin.setValue(pair.low_height)
+        self.high_height_spin.setValue(pair.high_height)
+        self.trip_ppm_spin.setValue(pair.trip_ppm)
+        self.trip_aqi_spin.setValue(pair.trip_aqi)
+        self.trip_duration_spin.setValue(pair.trip_duration)
+        
+        self.wall_combo.blockSignals(False)
+        self.distance_spin.blockSignals(False)
+        self.low_height_spin.blockSignals(False)
+        self.high_height_spin.blockSignals(False)
+        self.trip_ppm_spin.blockSignals(False)
+        self.trip_aqi_spin.blockSignals(False)
+        self.trip_duration_spin.blockSignals(False)
+        
+    def on_sensor_config_changed(self):
+        """Handle sensor configuration change."""
+        current_item = self.sensor_list.currentItem()
+        if current_item is None:
+            return
+        
+        pair_id = current_item.data(Qt.UserRole)
+        
+        # Find the sensor pair
+        pair = None
+        for sp in self.sensor_pairs:
+            if sp.pair_id == pair_id:
+                pair = sp
+                break
+        
+        if pair is None:
+            return
+        
+        # Update sensor pair configuration
+        wall = "south" if self.wall_combo.currentText() == "South Wall" else "north"
+        distance = self.distance_spin.value()
+        low_height = self.low_height_spin.value()
+        high_height = self.high_height_spin.value()
+        
+        # Recreate sensor pair with new settings
+        new_pair = SensorPair(
+            pair_id=pair_id,
+            distance_from_fan=distance,
+            low_height=low_height,
+            high_height=high_height,
+            fan_position=FAN_POSITION,
+            wall=wall,
+            trip_ppm=self.trip_ppm_spin.value(),
+            trip_aqi=self.trip_aqi_spin.value(),
+            trip_duration=self.trip_duration_spin.value()
+        )
+        
+        # Replace in list
+        for i, sp in enumerate(self.sensor_pairs):
+            if sp.pair_id == pair_id:
+                self.sensor_pairs[i] = new_pair
+                break
+        
+        # Update controllers
+        self.fan_controller.remove_sensor_pair(pair_id)
+        self.trip_controller.remove_sensor_pair(pair_id)
+        self.fan_controller.add_sensor_pair(new_pair)
+        self.trip_controller.add_sensor_pair(new_pair)
+        
+        # Update list
+        self.update_sensor_list()
+        
+        # Update renderer
+        self.renderer.set_simulation_refs(self.smoke_sim, self.fan, self.sensor_pairs)
+        
+    def on_num_smokers_changed(self, value):
+        """Handle number of smokers change."""
+        self.smoke_sim.set_num_smokers(value)
+        
+    def on_sim_speed_changed(self, text):
+        """Handle simulation speed change."""
+        speed = float(text.replace('x', ''))
+        self.dt = 0.1 * speed
+        self.sim_timer.setInterval(int(0.1 * 1000 / speed))
+        
+    def on_fan_mode_changed(self):
+        """Handle fan mode change."""
+        if self.manual_radio.isChecked():
+            self.fan_controller.set_mode('manual')
+            self.trip_controller.set_mode('manual')
+            self.manual_group_widget.setEnabled(True)
+            self.trip_status_group_widget.setVisible(False)
+            self.fan_mode_label.setText("Mode: Manual")
+            
+        elif self.auto_radio.isChecked():
+            self.fan_controller.set_mode('auto')
+            self.trip_controller.set_mode('manual')
+            self.manual_group_widget.setEnabled(False)
+            self.trip_status_group_widget.setVisible(False)
+            self.fan_mode_label.setText("Mode: Auto (PID)")
+            
+        elif self.trip_radio.isChecked():
+            self.fan_controller.set_mode('manual')
+            self.trip_controller.set_mode('trip')
+            self.manual_group_widget.setEnabled(False)
+            self.trip_status_group_widget.setVisible(True)
+            self.fan_mode_label.setText("Mode: Trip")
+            
+    def on_speed_slider_changed(self, value):
+        """Handle manual speed slider change."""
+        self.speed_value_label.setText(f"{value}%")
+        if self.manual_radio.isChecked():
+            self.fan.set_speed(value)
+            
+    def toggle_simulation(self):
+        """Toggle simulation running state."""
+        if self.simulation_running:
+            self.stop_simulation()
+        else:
+            self.start_simulation()
+            
+    def start_simulation(self):
+        """Start the simulation."""
+        self.simulation_running = True
+        self.start_stop_btn.setText("Stop Simulation")
+        self.sim_timer.start()
+        self.statusBar().showMessage("Simulation running")
+        
+    def stop_simulation(self):
+        """Stop the simulation."""
+        self.simulation_running = False
+        self.start_stop_btn.setText("Start Simulation")
+        self.sim_timer.stop()
+        self.statusBar().showMessage("Simulation stopped")
+        
+    def reset_simulation(self):
+        """Reset the simulation to initial state."""
+        was_running = self.simulation_running
+        if was_running:
+            self.stop_simulation()
+            
         self.simulation_time = 0.0
         self.smoke_sim.reset()
         self.fan.reset()
-        self.data_logger.reset()
         self.fan_controller.reset_pid()
+        self.trip_controller.reset()
         
         for pair in self.sensor_pairs:
             pair.reset()
-        
-        self._update_displays()
-        self.renderer_3d.update()
-    
-    def _update_num_smokers(self):
-        """Update number of smokers."""
-        num_smokers = self.spin_smokers.value()
-        self.smoke_sim.set_num_smokers(num_smokers)
-    
-    def _update_simulation_speed(self):
-        """Update simulation speed."""
-        self.simulation_speed = self.spin_speed.value()
-    
-    def _change_fan_mode(self, mode_text):
-        """Change fan mode.
-        
-        Args:
-            mode_text: "Manual" or "Automatic"
-        """
-        mode = 'manual' if mode_text == "Manual" else 'auto'
-        self.fan_controller.set_mode(mode)
-        
-        # Enable/disable manual controls
-        self.manual_speed_group.setEnabled(mode == 'manual')
-    
-    def _manual_fan_speed_changed(self, value):
-        """Handle manual fan speed change.
-        
-        Args:
-            value: New speed value (0-100)
-        """
-        if self.fan_controller.mode == 'manual':
-            self.fan.set_speed(value)
-        self.label_fan_speed.setText(f"Fan Speed: {value}%")
-    
-    def _add_sensor_pair(self):
-        """Add a new sensor pair."""
-        if len(self.sensor_pairs) >= 4:
-            QMessageBox.warning(self, "Maximum Sensors", "Maximum of 4 sensor pairs allowed.")
-            return
-        
-        pair_id = len(self.sensor_pairs)
-        distance = self.spin_sensor_distance.value()
-        low_height = self.spin_low_height.value()
-        high_height = self.spin_high_height.value()
-        
-        # Get wall selection
-        wall_text = self.combo_sensor_wall.currentText()
-        wall = 'north' if wall_text == "North Wall" else 'south'
-        
-        # Validate
-        if low_height >= high_height:
-            QMessageBox.warning(self, "Invalid Heights", "Low sensor must be below high sensor.")
-            return
-        
-        # Create sensor pair with wall selection
-        sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
-        self.sensor_pairs.append(sensor_pair)
-        self.fan_controller.add_sensor_pair(sensor_pair)
-        
-        # Print debug info
-        print(f"\n✓ Added Sensor Pair {pair_id} on {wall_text}:")
-        print(f"  Low:  X={sensor_pair.low_sensor.position[0]:.1f}, Y={sensor_pair.low_sensor.position[1]:.1f}, Z={sensor_pair.low_sensor.position[2]:.1f}")
-        print(f"  High: X={sensor_pair.high_sensor.position[0]:.1f}, Y={sensor_pair.high_sensor.position[1]:.1f}, Z={sensor_pair.high_sensor.position[2]:.1f}")
-        
-        # Update list with wall information
-        self.sensor_list.addItem(
-            f"Pair {pair_id}: {wall_text}, {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
-        )
-        
-        # Update renderer
-        self.renderer_3d.sensor_pairs = self.sensor_pairs
-        self.renderer_3d.update()
-    
-    def _remove_sensor_pair(self):
-        """Remove selected sensor pair."""
-        current_item = self.sensor_list.currentRow()
-        if current_item >= 0:
-            pair = self.sensor_pairs.pop(current_item)
-            self.fan_controller.remove_sensor_pair(pair.pair_id)
-            self.sensor_list.takeItem(current_item)
             
-            # Update renderer
-            self.renderer_3d.sensor_pairs = self.sensor_pairs
-            self.renderer_3d.update()
-    
-    def _update_simulation(self):
-        """Update simulation (called by timer)."""
-        if not self.is_running:
-            return
+        self.renderer.update()
+        self.update_display()
         
-        # Time step
-        dt = 0.033 * self.simulation_speed  # 33ms * speed multiplier
+        self.statusBar().showMessage("Simulation reset")
         
-        # Update physics
-        self.smoke_sim.update(dt)
-        self.fan.update(dt)
+        if was_running:
+            self.start_simulation()
+            
+    def update_simulation(self):
+        """Update simulation step."""
+        # Update simulation
+        self.simulation_time += self.dt
+        self.smoke_sim.update(self.dt)
         
         # Update sensors
         particles = self.smoke_sim.get_particles()
         for pair in self.sensor_pairs:
-            pair.update(particles, dt)
-        
-        # Update controller
-        self.fan_controller.update(dt)
-        
-        # Log data
-        self.data_logger.update(self.simulation_time, self.fan, self.smoke_sim, self.sensor_pairs, dt)
-        
-        # Update time
-        self.simulation_time += dt
-        
-        # Update 3D view
-        self.renderer_3d.update()
-    
-    def _update_displays(self):
-        """Update display panels (called by timer)."""
-        # Update fan info
-        fan_info = self.fan.get_info()
-        info_text = f"""Current Speed: {fan_info['speed_percent']:.1f}%
-Target Speed: {fan_info['target_speed']:.1f}%
-CFM: {fan_info['cfm']:.0f}
-Velocity: {fan_info['velocity']:.1f} ft/s
-Run Time: {fan_info['run_time']:.1f} s
-Status: {'Running' if fan_info['is_running'] else 'Off'}"""
-        self.label_fan_info.setText(info_text)
-        
-        # Update sensor readings
-        sensor_text = f"Simulation Time: {self.simulation_time:.1f}s\n\n"
-        sensor_text += f"Room Average PPM: {self.smoke_sim.calculate_room_average_ppm():.1f}\n"
-        sensor_text += f"Room Average Clarity: {self.smoke_sim.calculate_room_average_clarity():.1f}%\n"
-        sensor_text += f"Active Particles: {self.smoke_sim.get_particle_count()}\n\n"
-        
-        for pair in self.sensor_pairs:
-            readings = pair.get_readings()
-            wall_name = "North Wall" if pair.wall == 'north' else "South Wall"
-            sensor_text += f"Sensor Pair {readings['pair_id']} ({wall_name}):\n"
-            sensor_text += f"  Low  - PPM: {readings['low']['ppm']:.1f}, Clarity: {readings['low']['clarity_percent']:.1f}%\n"
-            sensor_text += f"  High - PPM: {readings['high']['ppm']:.1f}, Clarity: {readings['high']['clarity_percent']:.1f}%\n\n"
-        
-        self.text_sensor_data.setText(sensor_text)
-        
-        # Update graphs
-        self._update_graphs()
-        
-        # Update statistics
-        self._update_statistics()
-    
-    def _update_graphs(self):
-        """Update real-time graphs."""
-        graph_data = self.data_logger.get_graph_data()
-        time_data = graph_data['time']
-        
-        if len(time_data) == 0:
-            return
-        
-        # Clear and redraw PPM graph
-        self.graph_ppm.clear()
-        self.graph_ppm.plot(time_data, graph_data['room_ppm'], pen='w', name='Room Avg')
-        
-        colors = ['r', 'g', 'b', 'y']
-        for idx, (sensor_id, ppm_data) in enumerate(graph_data['sensor_ppm'].items()):
-            if len(ppm_data) > 0:
-                color = colors[idx % len(colors)]
-                self.graph_ppm.plot(time_data, ppm_data, pen=color, name=f'Sensor {sensor_id}')
-        
-        # Clear and redraw clarity graph
-        self.graph_clarity.clear()
-        self.graph_clarity.plot(time_data, graph_data['room_clarity'], pen='w', name='Room Avg')
-        
-        for idx, (sensor_id, clarity_data) in enumerate(graph_data['sensor_clarity'].items()):
-            if len(clarity_data) > 0:
-                color = colors[idx % len(colors)]
-                self.graph_clarity.plot(time_data, clarity_data, pen=color, name=f'Sensor {sensor_id}')
-        
-        # Clear and redraw fan speed graph
-        self.graph_fan.clear()
-        self.graph_fan.plot(time_data, graph_data['fan_speed'], pen='c')
-    
-    def _update_statistics(self):
-        """Update statistics display."""
-        stats = self.data_logger.get_statistics()
-        sim_stats = self.smoke_sim.get_statistics()
-        
-        stats_text = "=== SIMULATION STATISTICS ===\n\n"
-        stats_text += f"Simulation Time: {sim_stats['time']:.1f} seconds\n\n"
-        
-        stats_text += "Air Quality:\n"
-        stats_text += f"  Current Room PPM: {stats['current_room_ppm']:.1f}\n"
-        stats_text += f"  Peak PPM: {stats['peak_ppm']:.1f}\n"
-        stats_text += f"  Average PPM: {stats['average_ppm']:.1f}\n"
-        stats_text += f"  Current Clarity: {stats['current_room_clarity']:.1f}%\n\n"
-        
-        if stats['time_to_clear'] is not None:
-            stats_text += f"Time to Clear: {stats['time_to_clear']:.1f} seconds\n\n"
-        else:
-            stats_text += "Time to Clear: Not yet cleared\n\n"
-        
-        stats_text += "Particles:\n"
-        stats_text += f"  Active Particles: {sim_stats['particle_count']}\n"
-        stats_text += f"  Total Generated: {sim_stats['particles_generated']}\n"
-        stats_text += f"  Total Removed: {sim_stats['particles_removed']}\n\n"
-        
-        stats_text += "Configuration:\n"
-        stats_text += f"  Number of Smokers: {sim_stats['num_smokers']}\n"
-        stats_text += f"  Sensor Pairs: {len(self.sensor_pairs)}\n"
-        stats_text += f"  Fan Mode: {self.fan_controller.mode}\n"
-        stats_text += f"  Simulation Speed: {self.simulation_speed}x\n\n"
-        
-        stats_text += f"Data Points Logged: {stats['data_points']}\n"
-        
-        self.text_statistics.setText(stats_text)
-    
-    def _save_configuration(self):
-        """Save current configuration."""
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Save Configuration", "configs", "JSON Files (*.json)"
-        )
-        
-        if filename:
-            config = ConfigManager.create_config_dict(
-                self.sensor_pairs,
-                self.spin_smokers.value(),
-                self.fan_controller.mode,
-                self.simulation_speed
-            )
+            pair.update(particles, self.dt)
             
-            self.config_manager.save_config(config, filename.split('/')[-1])
-            QMessageBox.information(self, "Success", "Configuration saved successfully.")
-    def _load_configuration(self):
-        """Load a configuration."""
-        filename, _ = QFileDialog.getOpenFileName(
-            self, "Load Configuration", "configs", "JSON Files (*.json)"
-        )
-        
-        if filename:
-            config = self.config_manager.load_config(filename.split('/')[-1])
+        # Update controllers
+        if self.auto_radio.isChecked():
+            self.fan_controller.update(self.dt)
+        elif self.trip_radio.isChecked():
+            self.trip_controller.update(self.dt)
             
-            if config:
-                # Reset first
-                self._reset_simulation()
-                
-                # Clear existing sensors
-                self.sensor_pairs.clear()
-                self.fan_controller.clear_sensor_pairs()
-                self.sensor_list.clear()
-                
-                # Load sensors
-                for sensor_config in config.get('sensors', []):
-                    pair_id = sensor_config['pair_id']
-                    distance = sensor_config['distance_from_fan']
-                    low_height = sensor_config['low_height']
-                    high_height = sensor_config['high_height']
-                    wall = sensor_config.get('wall', 'south')  # Default to 'south' for backward compatibility
+        # Update fan
+        self.fan.update(self.dt)
+        
+    def update_display(self):
+        """Update display elements."""
+        # Update stats
+        particles = self.smoke_sim.get_particles()
+        num_particles = len(particles) if len(particles) > 0 else 0
+        
+        self.time_label.setText(f"Time: {self.simulation_time:.1f} s")
+        self.particles_label.setText(f"Particles: {num_particles}")
+        self.fan_status_label.setText(f"Fan Speed: {self.fan.speed_percent:.0f}%")
+        
+        # Update fan control tab
+        self.fan_speed_label.setText(f"Speed: {self.fan.speed_percent:.0f}%")
+        self.fan_cfm_label.setText(f"CFM: {self.fan.get_current_cfm():.0f}")
+        self.fan_runtime_label.setText(f"Runtime: {self.fan.run_time:.1f} s")
+        
+        # Update sensor readings and trip status
+        current_item = self.sensor_list.currentItem()
+        if current_item is not None:
+            pair_id = current_item.data(Qt.UserRole)
+            
+            for pair in self.sensor_pairs:
+                if pair.pair_id == pair_id:
+                    readings = pair.get_readings()
                     
-                    sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
-                    self.sensor_pairs.append(sensor_pair)
-                    self.fan_controller.add_sensor_pair(sensor_pair)
+                    low = readings['low']
+                    high = readings['high']
                     
-                    wall_text = "North Wall" if wall == 'north' else "South Wall"
-                    self.sensor_list.addItem(
-                        f"Pair {pair_id}: {wall_text}, {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
+                    # Update reading labels with AQI
+                    self.low_sensor_reading_label.setText(
+                        f"Low: PPM: {low['ppm']:.1f} | AQI: {int(low['aqi'])} | Clarity: {low['clarity_percent']:.1f}%"
                     )
-                
-                # Load simulation settings
-                sim_config = config.get('simulation', {})
-                self.spin_smokers.setValue(sim_config.get('num_smokers', DEFAULT_NUM_SMOKERS))
-                self.spin_speed.setValue(sim_config.get('simulation_speed', DEFAULT_SIMULATION_SPEED))
-                
-                fan_mode = sim_config.get('fan_mode', 'manual')
-                self.combo_fan_mode.setCurrentText('Automatic' if fan_mode == 'auto' else 'Manual')
-                
-                # Update renderer
-                self.renderer_3d.sensor_pairs = self.sensor_pairs
-                self.renderer_3d.update()
-                
-                QMessageBox.information(self, "Success", "Configuration loaded successfully.")
-            else:
-                QMessageBox.warning(self, "Error", "Could not load configuration file.")
-    
-    def _export_data(self):
-        """Export data to CSV."""
-        filepath = self.data_logger.export_to_csv()
+                    self.high_sensor_reading_label.setText(
+                        f"High: PPM: {high['ppm']:.1f} | AQI: {int(high['aqi'])} | Clarity: {high['clarity_percent']:.1f}%"
+                    )
+                    
+                    # Highlight if exceeds thresholds
+                    max_ppm = max(low['ppm'], high['ppm'])
+                    max_aqi = max(low['aqi'], high['aqi'])
+                    
+                    if max_ppm > pair.trip_ppm or max_aqi > pair.trip_aqi:
+                        self.low_sensor_reading_label.setStyleSheet("color: red; font-weight: bold;")
+                        self.high_sensor_reading_label.setStyleSheet("color: red; font-weight: bold;")
+                    else:
+                        self.low_sensor_reading_label.setStyleSheet("")
+                        self.high_sensor_reading_label.setStyleSheet("")
+                    
+                    # Update trip status
+                    if pair.is_tripped:
+                        self.trip_status_label.setText("TRIPPED")
+                        self.trip_status_label.setStyleSheet(
+                            "background-color: #e74c3c; color: white; "
+                            "font-weight: bold; font-size: 12pt; padding: 10px; border-radius: 5px;"
+                        )
+                        self.trip_duration_label.setText(f"Remaining: {int(pair.remaining_duration)} s")
+                    else:
+                        self.trip_status_label.setText("NORMAL")
+                        self.trip_status_label.setStyleSheet(
+                            "background-color: #2ecc71; color: white; "
+                            "font-weight: bold; font-size: 12pt; padding: 10px; border-radius: 5px;"
+                        )
+                        self.trip_duration_label.setText("Remaining: 0 s")
+                    
+                    break
         
-        if filepath:
-            QMessageBox.information(
-                self, "Success", 
-                f"Data exported successfully to:\n{filepath}"
-            )
-        else:
-            QMessageBox.warning(self, "Error", "No data to export.")
+        # Update trip controller status
+        if self.trip_radio.isChecked():
+            status = self.trip_controller.get_status()
+            
+            if status['any_sensor_tripped']:
+                self.trip_controller_status_label.setText(
+                    f"⚠ {status['num_sensors']} sensor(s) active | "
+                    f"Max Duration: {int(status['max_remaining_duration'])} s | "
+                    f"Highest AQI: {int(status['highest_aqi'])}"
+                )
+                self.trip_controller_status_label.setStyleSheet("color: red; font-weight: bold;")
+            else:
+                self.trip_controller_status_label.setText("No sensors tripped")
+                self.trip_controller_status_label.setStyleSheet("")
+            
+            # Update trip sensors list
+            self.trip_sensors_list.clear()
+            for sensor_status in status['sensor_statuses']:
+                if sensor_status['is_tripped']:
+                    item_text = (f"Pair {sensor_status['pair_id']}: "
+                               f"TRIPPED - {int(sensor_status['remaining_duration'])} s remaining")
+                    item = QListWidgetItem(item_text)
+                    item.setForeground(QColor(231, 76, 60))  # Red
+                    self.trip_sensors_list.addItem(item)
+        
+        # Update 3D visualization
+        self.renderer.update()

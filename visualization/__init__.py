@@ -1,1 +1,1 @@
-"""Visualization modules for 3D rendering."""
+"""Visualization package for 3D rendering."""
