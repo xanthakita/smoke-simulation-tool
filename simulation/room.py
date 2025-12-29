@@ -34,8 +34,8 @@ class Room:
         """
         # Distribute smokers in a grid-like pattern with some randomization
         # Leave space near walls and fan
-        margin_x = 3.0  # feet from side walls
-        margin_z = 5.0  # feet from front/back walls
+        margin_x = 3.0  # feet from North/South walls (x-axis)
+        margin_z = 5.0  # feet from East/West walls (z-axis)
         
         positions = []
         

@@ -11,7 +11,7 @@ ROOM_VOLUME = ROOM_WIDTH * ROOM_LENGTH * ROOM_HEIGHT  # cubic feet
 # Fan specifications
 FAN_DIAMETER = 28.8 / 12.0  # Convert inches to feet (2.4 ft)
 FAN_RADIUS = FAN_DIAMETER / 2.0
-FAN_POSITION = np.array([0.5, 17.5, 5.0])  # On left wall (6 inches from edge), 17.5ft up (2.5ft from ceiling), 5ft from front wall
+FAN_POSITION = np.array([5.0, 14.0, 0.5])  # On East wall (z≈0), 14ft high, 5ft from North wall (x≈0)
 FAN_MIN_SPEED = 0.0  # Percentage
 FAN_MAX_SPEED = 100.0  # Percentage
 

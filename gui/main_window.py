@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         
         config_layout.addWidget(QLabel("Sensor Wall:"), 0, 0)
         self.combo_sensor_wall = QComboBox()
-        self.combo_sensor_wall.addItems(["Back Wall", "Front Wall"])
+        self.combo_sensor_wall.addItems(["North Wall", "South Wall"])
         self.combo_sensor_wall.setToolTip("Select which wall to place sensors on (6 inches from wall)")
         config_layout.addWidget(self.combo_sensor_wall, 0, 1)
         
@@ -406,10 +406,10 @@ class MainWindow(QMainWindow):
         print("SIMULATION STARTED - CONFIGURATION")
         print("=" * 60)
         print(f"Fan Position: X={FAN_POSITION[0]} ft, Y={FAN_POSITION[1]} ft, Z={FAN_POSITION[2]} ft")
-        print(f"  (Left wall, {FAN_POSITION[1]} ft high, {FAN_POSITION[2]} ft from front wall)")
+        print(f"  (East wall, {FAN_POSITION[1]} ft high, {FAN_POSITION[0]} ft from North wall)")
         print(f"\nSensor Pairs: {len(self.sensor_pairs)}")
         for pair in self.sensor_pairs:
-            wall_name = "Front Wall" if pair.wall == 'front' else "Back Wall"
+            wall_name = "North Wall" if pair.wall == 'north' else "South Wall"
             print(f"  Pair {pair.pair_id} ({wall_name}):")
             print(f"    Low:  X={pair.low_sensor.position[0]:.1f}, Y={pair.low_sensor.position[1]:.1f}, Z={pair.low_sensor.position[2]:.1f}")
             print(f"    High: X={pair.high_sensor.position[0]:.1f}, Y={pair.high_sensor.position[1]:.1f}, Z={pair.high_sensor.position[2]:.1f}")
@@ -486,7 +486,7 @@ class MainWindow(QMainWindow):
         
         # Get wall selection
         wall_text = self.combo_sensor_wall.currentText()
-        wall = 'front' if wall_text == "Front Wall" else 'back'
+        wall = 'north' if wall_text == "North Wall" else 'south'
         
         # Validate
         if low_height >= high_height:
@@ -573,7 +573,7 @@ Status: {'Running' if fan_info['is_running'] else 'Off'}"""
         
         for pair in self.sensor_pairs:
             readings = pair.get_readings()
-            wall_name = "Front Wall" if pair.wall == 'front' else "Back Wall"
+            wall_name = "North Wall" if pair.wall == 'north' else "South Wall"
             sensor_text += f"Sensor Pair {readings['pair_id']} ({wall_name}):\n"
             sensor_text += f"  Low  - PPM: {readings['low']['ppm']:.1f}, Clarity: {readings['low']['clarity_percent']:.1f}%\n"
             sensor_text += f"  High - PPM: {readings['high']['ppm']:.1f}, Clarity: {readings['high']['clarity_percent']:.1f}%\n\n"
@@ -691,13 +691,13 @@ Status: {'Running' if fan_info['is_running'] else 'Off'}"""
                     distance = sensor_config['distance_from_fan']
                     low_height = sensor_config['low_height']
                     high_height = sensor_config['high_height']
-                    wall = sensor_config.get('wall', 'back')  # Default to 'back' for backward compatibility
+                    wall = sensor_config.get('wall', 'south')  # Default to 'south' for backward compatibility
                     
                     sensor_pair = SensorPair(pair_id, distance, low_height, high_height, FAN_POSITION, wall)
                     self.sensor_pairs.append(sensor_pair)
                     self.fan_controller.add_sensor_pair(sensor_pair)
                     
-                    wall_text = "Front Wall" if wall == 'front' else "Back Wall"
+                    wall_text = "North Wall" if wall == 'north' else "South Wall"
                     self.sensor_list.addItem(
                         f"Pair {pair_id}: {wall_text}, {distance}ft from fan, Low:{low_height}ft, High:{high_height}ft"
                     )
