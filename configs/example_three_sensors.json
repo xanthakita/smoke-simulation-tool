@@ -4,19 +4,31 @@
       "pair_id": 0,
       "distance_from_fan": 15.0,
       "low_height": 3.0,
-      "high_height": 12.0
+      "high_height": 12.0,
+      "wall": "south",
+      "trip_ppm": 100,
+      "trip_aqi": 150,
+      "trip_duration": 300
     },
     {
       "pair_id": 1,
       "distance_from_fan": 35.0,
       "low_height": 3.0,
-      "high_height": 12.0
+      "high_height": 12.0,
+      "wall": "south",
+      "trip_ppm": 75,
+      "trip_aqi": 125,
+      "trip_duration": 240
     },
     {
       "pair_id": 2,
       "distance_from_fan": 60.0,
       "low_height": 3.0,
-      "high_height": 12.0
+      "high_height": 12.0,
+      "wall": "south",
+      "trip_ppm": 50,
+      "trip_aqi": 100,
+      "trip_duration": 180
     }
   ],
   "simulation": {
