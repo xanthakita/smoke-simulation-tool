@@ -130,9 +130,9 @@ class SensorPair:
         # Calculate sensor positions
         fan_x, fan_y, fan_z = fan_position
         
-        # Place sensors at same Z position as fan
-        # Add small Z offset based on pair_id to prevent visual overlap
-        sensor_z = fan_z + (pair_id - 1.5) * 1.5  # Spread sensors across ~4.5 feet
+        # Place sensors based on distance_from_fan parameter
+        # Sensors are positioned along the Z-axis (length of room) from the fan
+        sensor_z = fan_z + distance_from_fan
         sensor_z = np.clip(sensor_z, 0, ROOM_LENGTH)
         
         # Calculate X position based on wall selection
