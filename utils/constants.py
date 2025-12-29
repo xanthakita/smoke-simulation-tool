@@ -124,6 +124,35 @@ COLOR_SENSOR_HIGH = (1.0, 0.0, 0.0)  # Red
 COLOR_FAN = (0.0, 0.5, 1.0)  # Blue
 COLOR_ROOM = (0.95, 0.95, 0.95)  # Off-white
 
+# Trip control parameters
+DEFAULT_TRIP_PPM = 150  # PPM threshold for trip activation
+DEFAULT_TRIP_AQI = 100  # AQI threshold for trip activation
+DEFAULT_TRIP_DURATION = 300  # seconds (5 minutes)
+
+# AQI breakpoints for PM2.5 (EPA standard)
+# Format: (AQI_low, AQI_high, Concentration_low, Concentration_high in µg/m³)
+AQI_BREAKPOINTS = [
+    (0, 50, 0.0, 12.0),           # Good
+    (51, 100, 12.1, 35.4),         # Moderate
+    (101, 150, 35.5, 55.4),        # Unhealthy for Sensitive Groups
+    (151, 200, 55.5, 150.4),       # Unhealthy
+    (201, 300, 150.5, 250.4),      # Very Unhealthy
+    (301, 500, 250.5, 500.0)       # Hazardous
+]
+
+# PPM to µg/m³ conversion factor for smoke particles
+# This is an approximation: 1 PPM ≈ 1000 µg/m³ for typical smoke particles
+PPM_TO_UG_M3 = 1000.0
+
+# AQI-based fan speed levels
+AQI_FAN_SPEED_LEVELS = [
+    (0, 50, 20),      # Good: 20% speed
+    (51, 100, 40),    # Moderate: 40% speed
+    (101, 150, 60),   # Unhealthy for Sensitive: 60% speed
+    (151, 200, 80),   # Unhealthy: 80% speed
+    (201, 500, 100)   # Very Unhealthy and above: 100% speed
+]
+
 # File paths
 CONFIG_DIR = "configs"
 DATA_EXPORT_DIR = "exports"

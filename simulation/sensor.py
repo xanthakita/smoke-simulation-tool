@@ -4,12 +4,54 @@ import numpy as np
 from collections import deque
 from utils.constants import (
     SENSOR_DETECTION_RADIUS, SENSOR_RESPONSE_TIME, SENSOR_MIN_HEIGHT,
-    SENSOR_MAX_HEIGHT, EXTINCTION_COEFFICIENT, ROOM_WIDTH, ROOM_LENGTH
+    SENSOR_MAX_HEIGHT, EXTINCTION_COEFFICIENT, ROOM_WIDTH, ROOM_LENGTH,
+    PPM_TO_UG_M3, AQI_BREAKPOINTS, DEFAULT_TRIP_PPM, DEFAULT_TRIP_AQI,
+    DEFAULT_TRIP_DURATION
 )
 
 
 class Sensor:
     """Represents an air quality sensor."""
+    
+    @staticmethod
+    def calculate_aqi_from_concentration(concentration_ug_m3):
+        """Calculate AQI from PM2.5 concentration using EPA formula.
+        
+        Args:
+            concentration_ug_m3: PM2.5 concentration in µg/m³
+            
+        Returns:
+            AQI value (0-500)
+        """
+        # Find the appropriate breakpoint
+        for aqi_low, aqi_high, conc_low, conc_high in AQI_BREAKPOINTS:
+            if conc_low <= concentration_ug_m3 <= conc_high:
+                # Linear interpolation formula
+                # AQI = ((AQI_high - AQI_low) / (Conc_high - Conc_low)) * (Conc - Conc_low) + AQI_low
+                aqi = ((aqi_high - aqi_low) / (conc_high - conc_low)) * (concentration_ug_m3 - conc_low) + aqi_low
+                return np.clip(aqi, 0, 500)
+        
+        # If concentration exceeds all breakpoints, return max AQI
+        if concentration_ug_m3 > AQI_BREAKPOINTS[-1][3]:
+            return 500.0
+        
+        return 0.0
+    
+    @staticmethod
+    def ppm_to_aqi(ppm):
+        """Convert PPM to AQI.
+        
+        Args:
+            ppm: Parts per million reading
+            
+        Returns:
+            AQI value (0-500)
+        """
+        # Convert PPM to µg/m³
+        concentration_ug_m3 = ppm * PPM_TO_UG_M3
+        
+        # Calculate AQI
+        return Sensor.calculate_aqi_from_concentration(concentration_ug_m3)
     
     def __init__(self, sensor_id, position, sensor_type='low'):
         """Initialize sensor.
@@ -27,10 +69,12 @@ class Sensor:
         # Current readings
         self.ppm = 0.0
         self.clarity_percent = 100.0
+        self.aqi = 0.0
         
         # Reading history for smoothing (simulate response time)
         self.ppm_history = deque(maxlen=10)
         self.clarity_history = deque(maxlen=10)
+        self.aqi_history = deque(maxlen=10)
         
         # Response time simulation
         self.response_time = SENSOR_RESPONSE_TIME
@@ -73,6 +117,14 @@ class Sensor:
         if len(self.ppm_history) > 0:
             self.ppm = np.mean(self.ppm_history)
         
+        # Calculate AQI from PPM
+        instantaneous_aqi = self.ppm_to_aqi(self.ppm)
+        self.aqi_history.append(instantaneous_aqi)
+        
+        # Smooth AQI reading
+        if len(self.aqi_history) > 0:
+            self.aqi = np.mean(self.aqi_history)
+        
         # Calculate air clarity using Beer-Lambert law
         # I/I0 = e^(-alpha * c * d)
         # where c is concentration (PPM), d is path length
@@ -88,13 +140,14 @@ class Sensor:
         """Get current sensor readings.
         
         Returns:
-            Dictionary with PPM and clarity readings
+            Dictionary with PPM, AQI, and clarity readings
         """
         return {
             'id': self.id,
             'type': self.type,
             'position': self.position.tolist(),
             'ppm': self.ppm,
+            'aqi': self.aqi,
             'clarity_percent': self.clarity_percent
         }
     
@@ -102,15 +155,18 @@ class Sensor:
         """Reset sensor readings."""
         self.ppm = 0.0
         self.clarity_percent = 100.0
+        self.aqi = 0.0
         self.ppm_history.clear()
         self.clarity_history.clear()
+        self.aqi_history.clear()
         self.time_since_update = 0.0
 
 
 class SensorPair:
     """Represents a pair of low and high sensors."""
     
-    def __init__(self, pair_id, distance_from_fan, low_height, high_height, fan_position, wall='south'):
+    def __init__(self, pair_id, distance_from_fan, low_height, high_height, fan_position, wall='south',
+                 trip_ppm=None, trip_aqi=None, trip_duration=None):
         """Initialize sensor pair.
         
         Args:
@@ -120,12 +176,25 @@ class SensorPair:
             high_height: Height of high sensor from floor (feet)
             fan_position: Position of the fan (numpy array)
             wall: Which wall to place sensors on ('north' or 'south')
+            trip_ppm: PPM threshold for trip activation (default: DEFAULT_TRIP_PPM)
+            trip_aqi: AQI threshold for trip activation (default: DEFAULT_TRIP_AQI)
+            trip_duration: Duration in seconds for fan to run after trip (default: DEFAULT_TRIP_DURATION)
         """
         self.pair_id = pair_id
         self.distance_from_fan = distance_from_fan
         self.low_height = np.clip(low_height, SENSOR_MIN_HEIGHT, SENSOR_MAX_HEIGHT)
         self.high_height = np.clip(high_height, SENSOR_MIN_HEIGHT, SENSOR_MAX_HEIGHT)
         self.wall = wall
+        
+        # Trip control settings
+        self.trip_ppm = trip_ppm if trip_ppm is not None else DEFAULT_TRIP_PPM
+        self.trip_aqi = trip_aqi if trip_aqi is not None else DEFAULT_TRIP_AQI
+        self.trip_duration = trip_duration if trip_duration is not None else DEFAULT_TRIP_DURATION
+        
+        # Trip state tracking
+        self.is_tripped = False
+        self.trip_start_time = None
+        self.remaining_duration = 0.0
         
         # Calculate sensor positions
         fan_x, fan_y, fan_z = fan_position
@@ -171,6 +240,70 @@ class SensorPair:
         }
     
     def reset(self):
-        """Reset both sensors."""
+        """Reset both sensors and trip state."""
         self.low_sensor.reset()
         self.high_sensor.reset()
+        self.is_tripped = False
+        self.trip_start_time = None
+        self.remaining_duration = 0.0
+    
+    def check_trip_condition(self):
+        """Check if sensor pair should trip based on current readings.
+        
+        Returns:
+            Boolean indicating if trip condition is met
+        """
+        # Get readings from both sensors
+        low_reading = self.low_sensor.get_reading()
+        high_reading = self.high_sensor.get_reading()
+        
+        # Check if either sensor exceeds thresholds
+        # Use the higher reading from the two sensors
+        max_ppm = max(low_reading['ppm'], high_reading['ppm'])
+        max_aqi = max(low_reading['aqi'], high_reading['aqi'])
+        
+        # Trip if PPM OR AQI exceeds threshold
+        return max_ppm > self.trip_ppm or max_aqi > self.trip_aqi
+    
+    def update_trip_state(self, current_time, dt):
+        """Update trip state based on current readings and time.
+        
+        Args:
+            current_time: Current simulation time in seconds
+            dt: Time step in seconds
+            
+        Returns:
+            Boolean indicating if sensor is currently tripped
+        """
+        # Check if trip condition is met
+        if self.check_trip_condition():
+            if not self.is_tripped:
+                # New trip activation
+                self.is_tripped = True
+                self.trip_start_time = current_time
+                self.remaining_duration = self.trip_duration
+            else:
+                # Trip condition still active, reset duration
+                self.remaining_duration = self.trip_duration
+        else:
+            # Trip condition not met, countdown remaining duration
+            if self.is_tripped and self.remaining_duration > 0:
+                self.remaining_duration -= dt
+                
+                # Check if trip duration has expired
+                if self.remaining_duration <= 0:
+                    self.is_tripped = False
+                    self.trip_start_time = None
+                    self.remaining_duration = 0.0
+        
+        return self.is_tripped
+    
+    def get_max_aqi(self):
+        """Get the maximum AQI from both sensors.
+        
+        Returns:
+            Maximum AQI value
+        """
+        low_reading = self.low_sensor.get_reading()
+        high_reading = self.high_sensor.get_reading()
+        return max(low_reading['aqi'], high_reading['aqi'])
